@@ -55,8 +55,8 @@ const (
 
 	GenericNoChannelNotification = "generic_no_channel"
 	GenericNotification          = "generic"
-	GenericNotificationServer    = "https://push-test.mattermost.com"
-	MmSupportAdvisorAddress      = "support-advisor@mattermost.com"
+	GenericNotificationServer    = "http://push_proxy:8066"
+	MmSupportAdvisorAddress      = "podpora@firma.seznam.cz"
 	FullNotification             = "full"
 	IdLoadedNotification         = "id_loaded"
 
@@ -123,7 +123,7 @@ const (
 	ServiceSettingsDefaultMaxURLLength           = 2048
 	ServiceSettingsMaxUniqueReactionsPerPost     = 500
 
-	TeamSettingsDefaultSiteName              = "Mattermost"
+	TeamSettingsDefaultSiteName              = "Seznam Teams"
 	TeamSettingsDefaultMaxUsersPerTeam       = 50
 	TeamSettingsDefaultCustomBrandText       = ""
 	TeamSettingsDefaultCustomDescriptionText = ""
@@ -191,8 +191,8 @@ const (
 	SamlSettingsDefaultCanonicalAlgorithm = SamlSettingsCanonicalAlgorithmC14n
 
 	NativeappSettingsDefaultAppDownloadLink        = "https://mattermost.com/pl/download-apps"
-	NativeappSettingsDefaultAndroidAppDownloadLink = "https://mattermost.com/pl/android-app/"
-	NativeappSettingsDefaultIosAppDownloadLink     = "https://mattermost.com/pl/ios-app/"
+	NativeappSettingsDefaultAndroidAppDownloadLink = "https://play.google.com/store/apps/details?id=cz.seznam.teams&hl=cs&gl=US"
+	NativeappSettingsDefaultIosAppDownloadLink     = "https://apps.apple.com/app/seznam-teams/id1441002385"
 
 	ExperimentalSettingsDefaultLinkMetadataTimeoutMilliseconds                       = 5000
 	ExperimentalSettingsDefaultUsersStatusAndProfileFetchingPollIntervalMilliseconds = 3000
@@ -2702,7 +2702,7 @@ func (s *LocalizationSettings) SetDefaults() {
 	}
 
 	if s.AvailableLocales == nil {
-		s.AvailableLocales = NewPointer("")
+		s.AvailableLocales = NewPointer("en,cs")
 	}
 
 	if s.EnableExperimentalLocales == nil {

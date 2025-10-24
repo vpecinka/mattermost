@@ -67,7 +67,6 @@ import (
 	"github.com/mattermost/mattermost/server/v8/channels/utils"
 	"github.com/mattermost/mattermost/server/v8/config"
 	"github.com/mattermost/mattermost/server/v8/einterfaces"
-	"github.com/mattermost/mattermost/server/v8/platform/services/awsmeter"
 	"github.com/mattermost/mattermost/server/v8/platform/services/cache"
 	"github.com/mattermost/mattermost/server/v8/platform/services/remotecluster"
 	"github.com/mattermost/mattermost/server/v8/platform/services/sharedchannel"
@@ -1194,11 +1193,16 @@ func (s *Server) runLicenseExpirationCheckJob() {
 }
 
 func runReportToAWSMeterJob(s *Server) {
-	model.CreateRecurringTask("Collect and send usage report to AWS Metering Service", func() {
-		doReportUsageToAWSMeteringService(s)
-	}, time.Hour*model.AwsMeteringReportInterval)
+	/*
+		model.CreateRecurringTask("Collect and send usage report to AWS Metering Service", func() {
+			doReportUsageToAWSMeteringService(s)
+		}, time.Hour*model.AwsMeteringReportInterval)
+	*/
+	// this is disabled
+	mlog.Info("AWS Metering Service reporting job is disabled.")
 }
 
+/*
 func doReportUsageToAWSMeteringService(s *Server) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*s.platform.Config().ServiceSettings.AWSMeteringTimeoutSeconds)*time.Second)
 	defer cancel()
@@ -1216,6 +1220,7 @@ func doReportUsageToAWSMeteringService(s *Server) {
 		mlog.Error("Failed to report usage to AWS Metering Service", mlog.Err(err))
 	}
 }
+*/
 
 func doSecurity(s *Server) {
 	s.DoSecurityUpdateCheck()
