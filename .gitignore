@@ -13,6 +13,9 @@ config/mattermost.mattermost-license
 config/config.json
 config/*.crt
 
+server/tmpprepackaged
+mattermost
+)
 web/static/js/bundle*.js
 web/static/js/bundle*.js.map
 web/static/js/libs*.js
