@@ -407,6 +407,18 @@ func GenerateLimitedClientConfig(c *model.Config, telemetryID string, license *m
 			props["EnableSignUpWithOpenId"] = strconv.FormatBool(*c.OpenIdSettings.Enable)
 			props["OpenIdButtonColor"] = *c.OpenIdSettings.ButtonColor
 			props["OpenIdButtonText"] = *c.OpenIdSettings.ButtonText
+		}
+	}
+
+	// Enable OpenID without license requirement
+	if license == nil || (license.Features.OpenId == nil || !*license.Features.OpenId) {
+		props["EnableSignUpWithOpenId"] = strconv.FormatBool(*c.OpenIdSettings.Enable)
+		props["OpenIdButtonColor"] = *c.OpenIdSettings.ButtonColor
+		props["OpenIdButtonText"] = *c.OpenIdSettings.ButtonText
+	}
+
+	if license != nil {
+		if *license.Features.OpenId {
 			props["EnableSignUpWithGitLab"] = strconv.FormatBool(*c.GitLabSettings.Enable)
 			props["GitLabButtonColor"] = *c.GitLabSettings.ButtonColor
 			props["GitLabButtonText"] = *c.GitLabSettings.ButtonText
