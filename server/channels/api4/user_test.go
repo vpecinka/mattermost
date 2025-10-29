@@ -33,7 +33,7 @@ import (
 	"github.com/mattermost/mattermost/server/v8/einterfaces/mocks"
 	"github.com/mattermost/mattermost/server/v8/platform/shared/mail"
 
-	_ "github.com/mattermost/mattermost/server/v8/channels/app/oauthproviders/gitlab"
+	_ "github.com/mattermost/mattermost/server/v8/channels/app/oauthproviders/openid"
 )
 
 func TestCreateUser(t *testing.T) {
