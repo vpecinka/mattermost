@@ -20,6 +20,12 @@ func RegisterElasticsearchInterface(f func(*PlatformService) searchengine.Search
 	elasticsearchInterface = f
 }
 
+var sznSearchInterface func(*PlatformService) searchengine.SearchEngineInterface
+
+func RegisterSznSearchInterface(f func(*PlatformService) searchengine.SearchEngineInterface) {
+	sznSearchInterface = f
+}
+
 var ldapDiagnosticInterface func(*PlatformService) einterfaces.LdapDiagnosticInterface
 
 func RegisterLdapDiagnosticInterface(f func(*PlatformService) einterfaces.LdapDiagnosticInterface) {

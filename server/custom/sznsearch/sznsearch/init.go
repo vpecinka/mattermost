@@ -6,8 +6,8 @@ import (
 )
 
 func init() {
-	// Register SznSearch engine with Mattermost platform
-	platform.RegisterElasticsearchInterface(func(ps *platform.PlatformService) searchengine.SearchEngineInterface {
+	// Register SznSearch engine with Mattermost platform (no license required)
+	platform.RegisterSznSearchInterface(func(ps *platform.PlatformService) searchengine.SearchEngineInterface {
 		return NewSznSearchEngine(ps)
 	})
 }
