@@ -3155,6 +3155,111 @@ func (s *ElasticsearchSettings) SetDefaults() {
 	}
 }
 
+type SznSearchSettings struct {
+	ConnectionURL         *string
+	Username              *string
+	Password              *string
+	EnableIndexing        *bool
+	EnableSearching       *bool
+	EnableAutocomplete    *bool
+	PostIndexReplicas     *int
+	PostIndexShards       *int
+	ChannelIndexReplicas  *int
+	ChannelIndexShards    *int
+	UserIndexReplicas     *int
+	UserIndexShards       *int
+	IndexPrefix           *string
+	LiveIndexingBatchSize *int
+	BatchSize             *int
+	RequestTimeoutSeconds *int
+	SkipTLSVerification   *bool
+	CA                    *string
+	ClientCert            *string
+	ClientKey             *string
+}
+
+func (s *SznSearchSettings) SetDefaults() {
+	if s.ConnectionURL == nil {
+		s.ConnectionURL = NewPointer("")
+	}
+
+	if s.Username == nil {
+		s.Username = NewPointer("")
+	}
+
+	if s.Password == nil {
+		s.Password = NewPointer("")
+	}
+
+	if s.CA == nil {
+		s.CA = NewPointer("")
+	}
+
+	if s.ClientCert == nil {
+		s.ClientCert = NewPointer("")
+	}
+
+	if s.ClientKey == nil {
+		s.ClientKey = NewPointer("")
+	}
+
+	if s.EnableIndexing == nil {
+		s.EnableIndexing = NewPointer(false)
+	}
+
+	if s.EnableSearching == nil {
+		s.EnableSearching = NewPointer(false)
+	}
+
+	if s.EnableAutocomplete == nil {
+		s.EnableAutocomplete = NewPointer(false)
+	}
+
+	if s.PostIndexReplicas == nil {
+		s.PostIndexReplicas = NewPointer(1)
+	}
+
+	if s.PostIndexShards == nil {
+		s.PostIndexShards = NewPointer(1)
+	}
+
+	if s.ChannelIndexReplicas == nil {
+		s.ChannelIndexReplicas = NewPointer(1)
+	}
+
+	if s.ChannelIndexShards == nil {
+		s.ChannelIndexShards = NewPointer(1)
+	}
+
+	if s.UserIndexReplicas == nil {
+		s.UserIndexReplicas = NewPointer(1)
+	}
+
+	if s.UserIndexShards == nil {
+		s.UserIndexShards = NewPointer(1)
+	}
+
+	if s.IndexPrefix == nil {
+		s.IndexPrefix = NewPointer("")
+	}
+
+	if s.LiveIndexingBatchSize == nil {
+		s.LiveIndexingBatchSize = NewPointer(1)
+	}
+
+	if s.BatchSize == nil {
+		s.BatchSize = NewPointer(10000)
+	}
+
+	if s.RequestTimeoutSeconds == nil {
+		s.RequestTimeoutSeconds = NewPointer(30)
+	}
+
+	if s.SkipTLSVerification == nil {
+		s.SkipTLSVerification = NewPointer(false)
+	}
+}
+
 type DataRetentionSettings struct {
 	EnableMessageDeletion          *bool   `access:"compliance_data_retention_policy"`
 	EnableFileDeletion             *bool   `access:"compliance_data_retention_policy"`
@@ -3860,6 +3965,7 @@ type Config struct {
 	ExperimentalSettings        ExperimentalSettings
 	AnalyticsSettings           AnalyticsSettings
 	ElasticsearchSettings       ElasticsearchSettings
+	SznSearchSettings           SznSearchSettings
 	DataRetentionSettings       DataRetentionSettings
 	MessageExportSettings       MessageExportSettings
 	JobSettings                 JobSettings
@@ -3973,6 +4079,7 @@ func (o *Config) SetDefaults() {
 	o.LocalizationSettings.SetDefaults()
 	o.AutoTranslationSettings.SetDefaults()
 	o.ElasticsearchSettings.SetDefaults()
+	o.SznSearchSettings.SetDefaults()
 	o.NativeAppSettings.SetDefaults()
 	o.DataRetentionSettings.SetDefaults()
 	o.RateLimitSettings.SetDefaults()

@@ -17,6 +17,15 @@ func (ps *PlatformService) StartSearchEngine() (string, string) {
 		})
 	}
 
+	// Start SznSearch engine (no license required)
+	if ps.SearchEngine.SznSearchEngine != nil && ps.SearchEngine.SznSearchEngine.IsEnabled() {
+		ps.Go(func() {
+			if err := ps.SearchEngine.SznSearchEngine.Start(); err != nil {
+				ps.Log().Error("Failed to start SznSearch engine", mlog.Err(err))
+			}
+		})
+	}
+
 	configListenerId := ps.AddConfigListener(func(oldConfig *model.Config, newConfig *model.Config) {
 		if ps.SearchEngine == nil {
 			return
@@ -46,6 +55,32 @@ func (ps *PlatformService) StartSearchEngine() (string, string) {
 					}
 					if err := ps.SearchEngine.ElasticsearchEngine.Start(); err != nil {
 						ps.Log().Error(err.Error())
+					}
+				}
+			})
+		}
+
+		// Handle SznSearch engine changes
+		if ps.SearchEngine.SznSearchEngine != nil && !*oldConfig.SznSearchSettings.EnableIndexing && *newConfig.SznSearchSettings.EnableIndexing {
+			ps.Go(func() {
+				if err := ps.SearchEngine.SznSearchEngine.Start(); err != nil {
+					ps.Log().Error("Failed to start SznSearch engine", mlog.Err(err))
+				}
+			})
+		} else if ps.SearchEngine.SznSearchEngine != nil && *oldConfig.SznSearchSettings.EnableIndexing && !*newConfig.SznSearchSettings.EnableIndexing {
+			ps.Go(func() {
+				if err := ps.SearchEngine.SznSearchEngine.Stop(); err != nil {
+					ps.Log().Error("Failed to stop SznSearch engine", mlog.Err(err))
+				}
+			})
+		} else if ps.SearchEngine.SznSearchEngine != nil && (*oldConfig.SznSearchSettings.Password != *newConfig.SznSearchSettings.Password || *oldConfig.SznSearchSettings.Username != *newConfig.SznSearchSettings.Username || *oldConfig.SznSearchSettings.ConnectionURL != *newConfig.SznSearchSettings.ConnectionURL) {
+			ps.Go(func() {
+				if *oldConfig.SznSearchSettings.EnableIndexing {
+					if err := ps.SearchEngine.SznSearchEngine.Stop(); err != nil {
+						ps.Log().Error("Failed to stop SznSearch engine", mlog.Err(err))
+					}
+					if err := ps.SearchEngine.SznSearchEngine.Start(); err != nil {
+						ps.Log().Error("Failed to start SznSearch engine", mlog.Err(err))
 					}
 				}
 			})
@@ -84,6 +119,12 @@ func (ps *PlatformService) StopSearchEngine() {
 	if ps.SearchEngine != nil && ps.SearchEngine.ElasticsearchEngine != nil && ps.SearchEngine.ElasticsearchEngine.IsActive() {
 		if err := ps.SearchEngine.ElasticsearchEngine.Stop(); err != nil {
 			ps.Log().Error("Failed to stop Elasticsearch engine", mlog.Err(err))
+		}
+	}
+
+	if ps.SearchEngine != nil && ps.SearchEngine.SznSearchEngine != nil && ps.SearchEngine.SznSearchEngine.IsActive() {
+		if err := ps.SearchEngine.SznSearchEngine.Stop(); err != nil {
+			ps.Log().Error("Failed to stop SznSearch engine", mlog.Err(err))
 		}
 	}
 }

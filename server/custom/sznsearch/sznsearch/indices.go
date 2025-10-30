@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/mattermost/mattermost/server/public/model"
+	"github.com/mattermost/mattermost/server/public/shared/mlog"
 	"github.com/mattermost/mattermost/server/v8/custom/sznsearch/common"
 )
 
@@ -90,6 +91,8 @@ var stateIndexSettings = map[string]any{
 
 // ensureIndices creates ElasticSearch indices if they don't exist
 func (s *SznSearchImpl) ensureIndices() *model.AppError {
+	s.Platform.Log().Info("SznSearch: Checking if indices exist")
+
 	// Check if message index exists
 	res, err := s.client.Indices.Exists([]string{common.MessageIndex})
 	if err != nil {
@@ -99,10 +102,19 @@ func (s *SznSearchImpl) ensureIndices() *model.AppError {
 
 	// Create message index if it doesn't exist
 	if res.StatusCode == http.StatusNotFound {
+		s.Platform.Log().Info("SznSearch: Message index not found, creating...",
+			mlog.String("index_name", common.MessageIndex),
+		)
 		if appErr := s.createIndex(common.MessageIndex, messageIndexSettings); appErr != nil {
 			return appErr
 		}
-		s.Platform.Log().Info("Created SznSearch message index")
+		s.Platform.Log().Info("SznSearch: Message index created successfully",
+			mlog.String("index_name", common.MessageIndex),
+		)
+	} else {
+		s.Platform.Log().Info("SznSearch: Message index already exists",
+			mlog.String("index_name", common.MessageIndex),
+		)
 	}
 
 	// Check if state index exists
@@ -114,10 +126,19 @@ func (s *SznSearchImpl) ensureIndices() *model.AppError {
 
 	// Create state index if it doesn't exist
 	if res.StatusCode == http.StatusNotFound {
+		s.Platform.Log().Info("SznSearch: State index not found, creating...",
+			mlog.String("index_name", common.StateIndex),
+		)
 		if appErr := s.createIndex(common.StateIndex, stateIndexSettings); appErr != nil {
 			return appErr
 		}
-		s.Platform.Log().Info("Created SznSearch state index")
+		s.Platform.Log().Info("SznSearch: State index created successfully",
+			mlog.String("index_name", common.StateIndex),
+		)
+	} else {
+		s.Platform.Log().Info("SznSearch: State index already exists",
+			mlog.String("index_name", common.StateIndex),
+		)
 	}
 
 	return nil
