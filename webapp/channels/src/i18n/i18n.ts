@@ -152,6 +152,12 @@ export const languages = {
         order: 21,
         url: langFiles.ja,
     },
+    cs: {
+        value: 'cs',
+        name: 'Čeština',
+        order: 22,
+        url: langFiles.cs,
+    },
 };
 
 export function getAllLanguages(includeExperimental = false): Record<string, Language> {
