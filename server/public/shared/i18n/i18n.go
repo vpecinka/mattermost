@@ -88,6 +88,7 @@ var supportedLocales = []string{
 	"zh-CN",
 	"zh-TW",
 	"ja",
+	"cs",
 }
 
 var (
