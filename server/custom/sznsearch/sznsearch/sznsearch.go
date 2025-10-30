@@ -9,6 +9,7 @@ import (
 
 	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/mattermost/mattermost/server/public/model"
+	"github.com/mattermost/mattermost/server/public/shared/mlog"
 	"github.com/mattermost/mattermost/server/v8/channels/app/platform"
 	"github.com/mattermost/mattermost/server/v8/custom/sznsearch/common"
 )
@@ -51,32 +52,32 @@ func (*SznSearchImpl) GetName() string {
 
 // IsEnabled checks if indexing is enabled in configuration
 func (s *SznSearchImpl) IsEnabled() bool {
-	return *s.Platform.Config().ElasticsearchSettings.EnableIndexing
+	return *s.Platform.Config().SznSearchSettings.EnableIndexing
 }
 
 // IsActive checks if the engine is ready and active
 func (s *SznSearchImpl) IsActive() bool {
-	return *s.Platform.Config().ElasticsearchSettings.EnableIndexing && atomic.LoadInt32(&s.ready) == 1
+	return *s.Platform.Config().SznSearchSettings.EnableIndexing && atomic.LoadInt32(&s.ready) == 1
 }
 
 // IsIndexingEnabled checks if indexing is enabled
 func (s *SznSearchImpl) IsIndexingEnabled() bool {
-	return *s.Platform.Config().ElasticsearchSettings.EnableIndexing
+	return *s.Platform.Config().SznSearchSettings.EnableIndexing
 }
 
 // IsSearchEnabled checks if searching is enabled
 func (s *SznSearchImpl) IsSearchEnabled() bool {
-	return *s.Platform.Config().ElasticsearchSettings.EnableSearching
+	return *s.Platform.Config().SznSearchSettings.EnableSearching
 }
 
 // IsAutocompletionEnabled checks if autocomplete is enabled
 func (s *SznSearchImpl) IsAutocompletionEnabled() bool {
-	return *s.Platform.Config().ElasticsearchSettings.EnableAutocomplete
+	return *s.Platform.Config().SznSearchSettings.EnableAutocomplete
 }
 
 // IsIndexingSync returns true if indexing should be synchronous
 func (s *SznSearchImpl) IsIndexingSync() bool {
-	return *s.Platform.Config().ElasticsearchSettings.LiveIndexingBatchSize <= 1
+	return *s.Platform.Config().SznSearchSettings.LiveIndexingBatchSize <= 1
 }
 
 // GetFullVersion returns the full ElasticSearch version
@@ -96,6 +97,8 @@ func (s *SznSearchImpl) GetPlugins() []string {
 
 // NewSznSearchEngine creates a new SznSearch engine instance
 func NewSznSearchEngine(ps *platform.PlatformService) *SznSearchImpl {
+	ps.Log().Info("SznSearch: Creating new engine instance")
+
 	return &SznSearchImpl{
 		Platform:         ps,
 		mutex:            common.NewKeyedMutex(),
@@ -116,11 +119,18 @@ func (s *SznSearchImpl) createClient() (*elasticsearch.Client, error) {
 	s.mutex.WLock(common.MutexNewESClient)
 	defer s.mutex.WUnlock(common.MutexNewESClient)
 
-	cfg := s.Platform.Config().ElasticsearchSettings
+	s.Platform.Log().Info("SznSearch: Creating ElasticSearch client")
+
+	cfg := s.Platform.Config().SznSearchSettings
 	var config elasticsearch.Config
 
 	// Check if TLS credentials are provided (client certificate authentication from config)
 	if *cfg.ClientCert != "" && *cfg.ClientKey != "" {
+		s.Platform.Log().Info("SznSearch: Using TLS client certificate authentication",
+			mlog.String("client_cert", *cfg.ClientCert),
+			mlog.String("connection_url", *cfg.ConnectionURL),
+		)
+
 		// Load client certificate and private key from config
 		cert, err := tls.LoadX509KeyPair(*cfg.ClientCert, *cfg.ClientKey)
 		if err != nil {
@@ -161,6 +171,11 @@ func (s *SznSearchImpl) createClient() (*elasticsearch.Client, error) {
 			Transport: transport,
 		}
 	} else {
+		s.Platform.Log().Info("SznSearch: Using username/password authentication",
+			mlog.String("username", *cfg.Username),
+			mlog.String("connection_url", *cfg.ConnectionURL),
+		)
+
 		// Fallback to username and password authentication
 		config = elasticsearch.Config{
 			Addresses: []string{*cfg.ConnectionURL},
@@ -169,60 +184,88 @@ func (s *SznSearchImpl) createClient() (*elasticsearch.Client, error) {
 		}
 	}
 
-	return elasticsearch.NewClient(config)
+	client, err := elasticsearch.NewClient(config)
+	if err != nil {
+		return nil, err
+	}
+
+	s.Platform.Log().Info("SznSearch: ElasticSearch client created successfully")
+	return client, nil
 }
 
 // Start initializes and starts the SznSearch engine
 func (s *SznSearchImpl) Start() *model.AppError {
+	s.Platform.Log().Info("SznSearch: Starting engine initialization")
+
 	// Check if indexing is enabled in config (no license required for custom implementation)
-	if !*s.Platform.Config().ElasticsearchSettings.EnableIndexing {
+	if !*s.Platform.Config().SznSearchSettings.EnableIndexing {
+		s.Platform.Log().Info("SznSearch: Indexing is disabled in config, skipping initialization")
 		return nil
 	}
 
 	s.mutex.WLock(common.MutexWorkerState)
 	if atomic.LoadInt32(&s.ready) != 0 {
 		s.mutex.WUnlock(common.MutexWorkerState)
+		s.Platform.Log().Info("SznSearch: Engine already started")
 		return nil // Already started
 	}
 	s.workerState = common.WorkerStateStarting
 	s.mutex.WUnlock(common.MutexWorkerState)
 
+	s.Platform.Log().Info("SznSearch: Creating ElasticSearch client connection")
+
 	// Create ES client
 	client, err := s.createClient()
 	if err != nil {
 		if appErr, ok := err.(*model.AppError); ok {
+			s.Platform.Log().Error("SznSearch: Failed to create client", mlog.Err(appErr))
 			return appErr
 		}
+		s.Platform.Log().Error("SznSearch: Failed to create client", mlog.Err(err))
 		return model.NewAppError("SznSearch.Start", "sznsearch.start.create_client", nil, err.Error(), http.StatusInternalServerError)
 	}
+
+	s.Platform.Log().Info("SznSearch: Testing ElasticSearch connection")
 
 	// Test connection
 	info, esErr := client.Info()
 	if esErr != nil {
+		s.Platform.Log().Error("SznSearch: Connection test failed", mlog.Err(esErr))
 		return model.NewAppError("SznSearch.Start", "sznsearch.start.connection_failed", nil, esErr.Error(), http.StatusInternalServerError)
 	}
 	defer info.Body.Close()
 
 	if info.IsError() {
+		s.Platform.Log().Error("SznSearch: Connection error",
+			mlog.Int("status_code", info.StatusCode),
+			mlog.String("response", info.String()),
+		)
 		return model.NewAppError("SznSearch.Start", "sznsearch.start.connection_error", nil, info.String(), http.StatusInternalServerError)
 	}
+
+	s.Platform.Log().Info("SznSearch: Connection test successful")
 
 	s.client = client
 	s.fullVersion = "8.0.0" // Would parse from info
 	s.version = 8
 	s.plugins = []string{} // Would get from cluster state
 
+	s.Platform.Log().Info("SznSearch: Ensuring indices exist")
+
 	// Ensure indices exist
 	if appErr := s.ensureIndices(); appErr != nil {
+		s.Platform.Log().Error("SznSearch: Failed to ensure indices", mlog.Err(appErr))
 		return appErr
 	}
+
+	s.Platform.Log().Info("SznSearch: Indices verified successfully")
 
 	atomic.StoreInt32(&s.ready, 1)
 	s.mutex.WLock(common.MutexWorkerState)
 	s.workerState = common.WorkerStateIdle
 	s.mutex.WUnlock(common.MutexWorkerState)
 
-	s.Platform.Log().Info("SznSearch engine started successfully")
+	s.Platform.Log().Info("SznSearch: Engine started successfully, launching background indexer")
 
 	// Start background indexer
 	go s.startIndexer()

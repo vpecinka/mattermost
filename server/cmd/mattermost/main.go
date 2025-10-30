@@ -12,11 +12,11 @@ import (
 	// OAuth Providers
 	_ "github.com/mattermost/mattermost/server/v8/channels/app/oauthproviders/openid"
 
-	// Custom SznSearch Engine
-	_ "github.com/mattermost/mattermost/server/v8/custom/sznsearch/sznsearch"
-
 	// Enterprise Imports
 	_ "github.com/mattermost/mattermost/server/v8/enterprise"
+
+	// Custom SznSearch Engine - MUST be after enterprise to override elasticsearch
+	_ "github.com/mattermost/mattermost/server/v8/custom/sznsearch/sznsearch"
 )
 
 func main() {

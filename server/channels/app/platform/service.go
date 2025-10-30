@@ -498,6 +498,11 @@ func (ps *PlatformService) initEnterprise() {
 		ps.SearchEngine.RegisterElasticsearchEngine(elasticsearchInterface(ps))
 	}
 
+	// Register SznSearch engine if available (no license required)
+	if sznSearchInterface != nil {
+		ps.SearchEngine.RegisterSznSearchEngine(sznSearchInterface(ps))
+	}
+
 	if ldapDiagnosticInterface != nil {
 		ps.ldapDiagnostic = ldapDiagnosticInterface(ps)
 	}
