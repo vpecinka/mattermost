@@ -18,7 +18,10 @@ const (
 
 // startIndexer starts the background indexer worker
 func (s *SznSearchImpl) startIndexer() {
-	s.Platform.Log().Info("Starting SznSearch indexer worker")
+	s.Platform.Log().Info("SznSearch: Background indexer worker started",
+		mlog.Duration("tick_interval", indexerTickInterval),
+		mlog.Int("batch_size", batchSize),
+	)
 
 	ticker := time.NewTicker(indexerTickInterval)
 	defer ticker.Stop()
@@ -26,7 +29,7 @@ func (s *SznSearchImpl) startIndexer() {
 	for {
 		select {
 		case <-s.stopChan:
-			s.Platform.Log().Info("Stopping SznSearch indexer worker")
+			s.Platform.Log().Info("SznSearch: Background indexer worker stopped")
 			return
 		case <-ticker.C:
 			s.processMessageQueue()
@@ -45,6 +48,10 @@ func (s *SznSearchImpl) processMessageQueue() {
 		s.mutex.WUnlock(common.MutexMessageQueue)
 		return
 	}
+
+	s.Platform.Log().Debug("SznSearch: Processing message queue",
+		mlog.Int("num_channels", len(s.messageQueue)),
+	)
 
 	// Collect batch of messages
 	batch := make([]common.IndexedMessage, 0, batchSize)
@@ -68,9 +75,14 @@ func (s *SznSearchImpl) processMessageQueue() {
 	}
 
 	// Index batch
-	s.Platform.Log().Debug("SznSearch indexing batch", mlog.Int("size", len(batch)))
+	s.Platform.Log().Debug("SznSearch: Indexing batch", mlog.Int("batch_size", len(batch)))
 	if err := s.indexMessageBatch(batch); err != nil {
-		s.Platform.Log().Error("Failed to index message batch", mlog.Err(err))
+		s.Platform.Log().Error("SznSearch: Failed to index message batch",
+			mlog.Err(err),
+			mlog.Int("batch_size", len(batch)),
+		)
+	} else {
+		s.Platform.Log().Debug("SznSearch: Successfully indexed batch", mlog.Int("batch_size", len(batch)))
 	}
 }
 
@@ -79,6 +91,8 @@ func (s *SznSearchImpl) indexMessageBatch(messages []common.IndexedMessage) *mod
 	if len(messages) == 0 {
 		return nil
 	}
+
+	s.Platform.Log().Debug("SznSearch: Building bulk request", mlog.Int("num_messages", len(messages)))
 
 	// Build bulk request body (newline-delimited JSON)
 	var buf bytes.Buffer
@@ -92,6 +106,10 @@ func (s *SznSearchImpl) indexMessageBatch(messages []common.IndexedMessage) *mod
 			},
 		}
 		if err := json.NewEncoder(&buf).Encode(meta); err != nil {
+			s.Platform.Log().Error("SznSearch: Failed to encode bulk meta",
+				mlog.String("post_id", msg.ID),
+				mlog.Err(err),
+			)
 			return model.NewAppError("SznSearch.indexMessageBatch", "sznsearch.indexer.encode_meta", nil, err.Error(), 500)
 		}
 
@@ -107,9 +125,15 @@ func (s *SznSearchImpl) indexMessageBatch(messages []common.IndexedMessage) *mod
 			"Members":     msg.Members,
 		}
 		if err := json.NewEncoder(&buf).Encode(doc); err != nil {
+			s.Platform.Log().Error("SznSearch: Failed to encode bulk document",
+				mlog.String("post_id", msg.ID),
+				mlog.Err(err),
+			)
 			return model.NewAppError("SznSearch.indexMessageBatch", "sznsearch.indexer.encode_doc", nil, err.Error(), 500)
 		}
 	}
+
+	s.Platform.Log().Debug("SznSearch: Sending bulk request", mlog.Int("size_bytes", buf.Len()))
 
 	// Execute bulk request
 	res, err := s.client.Bulk(
@@ -117,11 +141,16 @@ func (s *SznSearchImpl) indexMessageBatch(messages []common.IndexedMessage) *mod
 		s.client.Bulk.WithContext(context.Background()),
 	)
 	if err != nil {
+		s.Platform.Log().Error("SznSearch: Bulk request failed", mlog.Err(err))
 		return model.NewAppError("SznSearch.indexMessageBatch", "sznsearch.indexer.bulk_error", nil, err.Error(), 500)
 	}
 	defer res.Body.Close()
 
 	if res.IsError() {
+		s.Platform.Log().Error("SznSearch: ElasticSearch bulk error",
+			mlog.Int("status_code", res.StatusCode),
+			mlog.String("response", res.String()),
+		)
 		return model.NewAppError("SznSearch.indexMessageBatch", "sznsearch.indexer.bulk_es_error", nil, res.String(), 500)
 	}
 

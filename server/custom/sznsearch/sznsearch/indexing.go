@@ -18,8 +18,19 @@ func (s *SznSearchImpl) IndexPost(post *model.Post, teamId string) *model.AppErr
 		return nil // Not an error if not started
 	}
 
+	s.Platform.Log().Debug("SznSearch: IndexPost called",
+		mlog.String("post_id", post.Id),
+		mlog.String("channel_id", post.ChannelId),
+		mlog.String("user_id", post.UserId),
+		mlog.Bool("is_sync", s.IsIndexingSync()),
+	)
+
 	msg, err := s.formatPostForIndex(post)
 	if err != nil {
+		s.Platform.Log().Error("SznSearch: Failed to format post for indexing",
+			mlog.String("post_id", post.Id),
+			mlog.Err(err),
+		)
 		return err
 	}
 
@@ -30,11 +41,19 @@ func (s *SznSearchImpl) IndexPost(post *model.Post, teamId string) *model.AppErr
 			s.messageQueue[post.ChannelId] = make([]*common.IndexedMessage, 0)
 		}
 		s.messageQueue[post.ChannelId] = append(s.messageQueue[post.ChannelId], msg)
+		queueSize := len(s.messageQueue[post.ChannelId])
 		s.mutex.WUnlock(common.MutexMessageQueue)
+
+		s.Platform.Log().Debug("SznSearch: Post added to async queue",
+			mlog.String("post_id", post.Id),
+			mlog.String("channel_id", post.ChannelId),
+			mlog.Int("queue_size", queueSize),
+		)
 		return nil
 	}
 
 	// Synchronous indexing
+	s.Platform.Log().Debug("SznSearch: Indexing post synchronously", mlog.String("post_id", post.Id))
 	return s.indexMessageBatch([]common.IndexedMessage{*msg})
 }
 
@@ -44,16 +63,31 @@ func (s *SznSearchImpl) DeletePost(post *model.Post) *model.AppError {
 		return nil
 	}
 
+	s.Platform.Log().Debug("SznSearch: DeletePost called",
+		mlog.String("post_id", post.Id),
+		mlog.String("channel_id", post.ChannelId),
+	)
+
 	res, err := s.client.Delete(common.MessageIndex, post.Id)
 	if err != nil {
+		s.Platform.Log().Error("SznSearch: Failed to delete post",
+			mlog.String("post_id", post.Id),
+			mlog.Err(err),
+		)
 		return model.NewAppError("SznSearch.DeletePost", "sznsearch.delete_post.error", nil, err.Error(), http.StatusInternalServerError)
 	}
 	defer res.Body.Close()
 
 	if res.IsError() && res.StatusCode != http.StatusNotFound {
+		s.Platform.Log().Error("SznSearch: ElasticSearch error deleting post",
+			mlog.String("post_id", post.Id),
+			mlog.Int("status_code", res.StatusCode),
+			mlog.String("response", res.String()),
+		)
 		return model.NewAppError("SznSearch.DeletePost", "sznsearch.delete_post.es_error", nil, res.String(), http.StatusInternalServerError)
 	}
 
+	s.Platform.Log().Debug("SznSearch: Post deleted successfully", mlog.String("post_id", post.Id))
 	return nil
 }
 
@@ -129,9 +163,19 @@ func (s *SznSearchImpl) DeleteUserPosts(rctx request.CTX, userID string) *model.
 
 // formatPostForIndex converts a post to IndexedMessage format
 func (s *SznSearchImpl) formatPostForIndex(post *model.Post) (*common.IndexedMessage, *model.AppError) {
+	s.Platform.Log().Debug("SznSearch: Formatting post for index",
+		mlog.String("post_id", post.Id),
+		mlog.String("channel_id", post.ChannelId),
+	)
+
 	// Get channel to determine type and members
 	channel, err := s.Platform.Store.Channel().Get(post.ChannelId, true)
 	if err != nil {
+		s.Platform.Log().Error("SznSearch: Failed to get channel for post",
+			mlog.String("post_id", post.Id),
+			mlog.String("channel_id", post.ChannelId),
+			mlog.Err(err),
+		)
 		return nil, model.NewAppError("SznSearch.formatPostForIndex", "sznsearch.format_post.get_channel", nil, err.Error(), http.StatusInternalServerError)
 	}
 

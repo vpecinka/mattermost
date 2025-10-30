@@ -24,15 +24,23 @@ func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*
 		channelIds = append(channelIds, channel.Id)
 	}
 
+	s.Platform.Log().Debug("SznSearch: SearchPosts called",
+		mlog.Int("num_channels", len(channelIds)),
+		mlog.Int("num_params", len(searchParams)),
+		mlog.Int("page", page),
+		mlog.Int("per_page", perPage),
+	)
+
 	// Build ElasticSearch query
 	esQuery := s.buildSearchQuery(searchParams, channelIds, page, perPage)
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(esQuery); err != nil {
+		s.Platform.Log().Error("SznSearch: Failed to encode search query", mlog.Err(err))
 		return nil, nil, model.NewAppError("SznSearch.SearchPosts", "sznsearch.search_posts.encode", nil, err.Error(), http.StatusInternalServerError)
 	}
 
-	s.Platform.Log().Debug("SznSearch query", mlog.String("query", buf.String()))
+	s.Platform.Log().Debug("SznSearch: Executing query", mlog.String("query", buf.String()))
 
 	// Execute search
 	res, err := s.client.Search(
@@ -41,11 +49,16 @@ func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*
 		s.client.Search.WithTrackTotalHits(true),
 	)
 	if err != nil {
+		s.Platform.Log().Error("SznSearch: Search request failed", mlog.Err(err))
 		return nil, nil, model.NewAppError("SznSearch.SearchPosts", "sznsearch.search_posts.error", nil, err.Error(), http.StatusInternalServerError)
 	}
 	defer res.Body.Close()
 
 	if res.IsError() {
+		s.Platform.Log().Error("SznSearch: ElasticSearch error",
+			mlog.Int("status_code", res.StatusCode),
+			mlog.String("response", res.String()),
+		)
 		return nil, nil, model.NewAppError("SznSearch.SearchPosts", "sznsearch.search_posts.es_error", nil, res.String(), http.StatusInternalServerError)
 	}
 
@@ -61,8 +74,13 @@ func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*
 	}
 
 	if err := json.NewDecoder(res.Body).Decode(&result); err != nil {
+		s.Platform.Log().Error("SznSearch: Failed to decode search response", mlog.Err(err))
 		return nil, nil, model.NewAppError("SznSearch.SearchPosts", "sznsearch.search_posts.decode", nil, err.Error(), http.StatusInternalServerError)
 	}
+
+	s.Platform.Log().Debug("SznSearch: Search results received",
+		mlog.Int("num_hits", len(result.Hits.Hits)),
+	)
 
 	// Extract post IDs and matches
 	postIds := make([]string, 0, len(result.Hits.Hits))
@@ -83,6 +101,10 @@ func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*
 			}
 			if len(terms) > 0 {
 				matches[hit.ID] = terms
+				s.Platform.Log().Debug("SznSearch: Extracted highlight terms",
+					mlog.String("post_id", hit.ID),
+					mlog.Int("num_terms", len(terms)),
+				)
 			}
 		}
 	}
@@ -92,6 +114,13 @@ func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*
 
 // buildSearchQuery constructs an ElasticSearch query from search parameters
 func (s *SznSearchImpl) buildSearchQuery(searchParams []*model.SearchParams, channelIds []string, page, perPage int) map[string]any {
+	s.Platform.Log().Debug("SznSearch: Building search query",
+		mlog.Int("num_params", len(searchParams)),
+		mlog.Int("num_channels", len(channelIds)),
+		mlog.Int("page", page),
+		mlog.Int("per_page", perPage),
+	)
+
 	query := map[string]any{
 		"from": page * perPage,
 		"size": perPage,
@@ -125,9 +154,17 @@ func (s *SznSearchImpl) buildSearchQuery(searchParams []*model.SearchParams, cha
 	filters = append(filters, map[string]any{
 		"terms": map[string][]string{"ChannelId": channelIds},
 	})
+	s.Platform.Log().Debug("SznSearch: Added channel filter", mlog.Int("num_channels", len(channelIds)))
 
 	// Process search parameters
-	for _, params := range searchParams {
+	for i, params := range searchParams {
+		s.Platform.Log().Debug("SznSearch: Processing search param",
+			mlog.Int("param_index", i),
+			mlog.String("terms", params.Terms),
+			mlog.Int("num_from_users", len(params.FromUsers)),
+			mlog.Int("num_excluded_users", len(params.ExcludedUsers)),
+		)
+
 		// Main search terms
 		if params.Terms != "" {
 			musts = append(musts, map[string]any{
@@ -187,6 +224,12 @@ func (s *SznSearchImpl) buildSearchQuery(searchParams []*model.SearchParams, cha
 	boolQuery["filter"] = filters
 	boolQuery["must"] = musts
 	boolQuery["must_not"] = mustNots
+
+	s.Platform.Log().Debug("SznSearch: Query built",
+		mlog.Int("num_filters", len(filters)),
+		mlog.Int("num_must", len(musts)),
+		mlog.Int("num_must_not", len(mustNots)),
+	)
 
 	return query
 }
