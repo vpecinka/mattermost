@@ -208,9 +208,19 @@ func ValidateWebAuthRedirectUrl(config *model.Config, redirectURL string) error 
 		return errors.Wrap(err, "failed to parse SiteURL from config")
 	}
 
-	if u.Scheme != siteURL.Scheme {
-		return errors.Errorf("redirect URL scheme %q does not match site URL scheme %q", u.Scheme, siteURL.Scheme)
+	// Accept relative URLs (without scheme and host) that start with /
+	if u.Scheme == "" && u.Host == "" {
+		if strings.HasPrefix(u.Path, "/") {
+			return nil
+		}
+		return errors.Errorf("redirect URL path %q is not valid", u.Path)
 	}
+
+	// For absolute URLs, validate scheme and host match
+	if u.Scheme == siteURL.Scheme && u.Host == siteURL.Host {
+		return nil
+	}
+
 	if u.Host != siteURL.Host {
 		return errors.Errorf("redirect URL host %q does not match site URL host %q", u.Host, siteURL.Host)
 	}

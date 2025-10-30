@@ -613,13 +613,50 @@ func TestIsValidWebAuthRedirectURL(t *testing.T) {
 		assert.Contains(t, err.Error(), "host")
 	})
 
-	t.Run("Valid relative URL path", func(t *testing.T) {
+	t.Run("Valid redirect URL - relative path with leading slash", func(t *testing.T) {
 		config := &model.Config{
 			ServiceSettings: model.ServiceSettings{
 				SiteURL: new("https://example.com"),
 			},
 		}
-		redirectURL := "/test/channels/town-square"
+
+		redirectURL := "/seznam/channels/town-square"
+
+		err := ValidateWebAuthRedirectUrl(config, redirectURL)
+		require.NoError(t, err)
+	})
+
+	t.Run("Valid redirect URL - relative path with query params", func(t *testing.T) {
+		config := &model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: model.NewPointer("https://example.com"),
+			},
+		}
+		redirectURL := "/oauth/callback?state=abc123"
+
+		err := ValidateWebAuthRedirectUrl(config, redirectURL)
+		require.NoError(t, err)
+	})
+
+	t.Run("Invalid redirect URL - relative path without leading slash", func(t *testing.T) {
+		config := &model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: model.NewPointer("https://example.com"),
+			},
+		}
+		redirectURL := "seznam/channels/town-square"
+
+		err := ValidateWebAuthRedirectUrl(config, redirectURL)
+		require.NoError(t, err)
+	})
+
+	t.Run("Valid redirect URL - root path", func(t *testing.T) {
+		config := &model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: model.NewPointer("https://example.com"),
+			},
+		}
+		redirectURL := "/"
 
 		err := ValidateWebAuthRedirectUrl(config, redirectURL)
 		require.NoError(t, err)
