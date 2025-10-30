@@ -198,6 +198,13 @@ func IsValidWebAuthRedirectURL(config *model.Config, redirectURL string) bool {
 	if err != nil {
 		return false
 	}
+
+	// Accept relative URLs (without scheme and host) that start with /
+	if u.Scheme == "" && u.Host == "" {
+		return strings.HasPrefix(u.Path, "/")
+	}
+
+	// For absolute URLs, validate scheme and host match
 	if u.Scheme == siteURL.Scheme && u.Host == siteURL.Host {
 		return true
 	}

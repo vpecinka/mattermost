@@ -603,4 +603,52 @@ func TestIsValidWebAuthRedirectURL(t *testing.T) {
 		result := IsValidWebAuthRedirectURL(config, redirectURL)
 		assert.False(t, result)
 	})
+
+	t.Run("Valid redirect URL - relative path with leading slash", func(t *testing.T) {
+		config := &model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: model.NewPointer("https://example.com"),
+			},
+		}
+		redirectURL := "/seznam/channels/town-square"
+
+		result := IsValidWebAuthRedirectURL(config, redirectURL)
+		assert.True(t, result)
+	})
+
+	t.Run("Valid redirect URL - relative path with query params", func(t *testing.T) {
+		config := &model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: model.NewPointer("https://example.com"),
+			},
+		}
+		redirectURL := "/oauth/callback?state=abc123"
+
+		result := IsValidWebAuthRedirectURL(config, redirectURL)
+		assert.True(t, result)
+	})
+
+	t.Run("Invalid redirect URL - relative path without leading slash", func(t *testing.T) {
+		config := &model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: model.NewPointer("https://example.com"),
+			},
+		}
+		redirectURL := "seznam/channels/town-square"
+
+		result := IsValidWebAuthRedirectURL(config, redirectURL)
+		assert.False(t, result)
+	})
+
+	t.Run("Valid redirect URL - root path", func(t *testing.T) {
+		config := &model.Config{
+			ServiceSettings: model.ServiceSettings{
+				SiteURL: model.NewPointer("https://example.com"),
+			},
+		}
+		redirectURL := "/"
+
+		result := IsValidWebAuthRedirectURL(config, redirectURL)
+		assert.True(t, result)
+	})
 }
