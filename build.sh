@@ -1,6 +1,6 @@
 #!/bin/zsh
 
-export BUILD_NUMBER="szn-v11.0.4-001"
+export BUILD_NUMBER="szn-$(date +%y%m%d%H%M)"
 
 # Plugins to pre-package
 PLUGIN_PACKAGES="mattermost-plugin-jira-v4.3.0"
