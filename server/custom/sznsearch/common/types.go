@@ -1,5 +1,9 @@
 package common
 
+import (
+	"encoding/json"
+)
+
 const (
 	// Index names and types
 	MessageIndexHunspell = "hunspell_index"
@@ -44,6 +48,7 @@ type IndexedMessage struct {
 	ID          string   `json:"Id"`
 	Message     string   `json:"Message"`
 	Payload     string   `json:"Payload"`
+	Hashtags    []string `json:"Hashtags"`
 	CreatedAt   int64    `json:"CreatedAt"`
 	ChannelID   string   `json:"ChannelId"`
 	ChannelType int8     `json:"ChannelType"`
@@ -102,4 +107,9 @@ func GetChannelTypeInt(channelType string) int8 {
 	default:
 		return ChannelTypePublic
 	}
+}
+
+// ToJSON converts IndexedMessage to JSON bytes
+func (m *IndexedMessage) ToJSON() ([]byte, error) {
+	return json.Marshal(m)
 }
