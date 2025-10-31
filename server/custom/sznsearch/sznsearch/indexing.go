@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/shared/mlog"
@@ -41,14 +42,7 @@ func (s *SznSearchImpl) IndexPost(post *model.Post, teamId string) *model.AppErr
 			s.messageQueue[post.ChannelId] = make([]*common.IndexedMessage, 0)
 		}
 		s.messageQueue[post.ChannelId] = append(s.messageQueue[post.ChannelId], msg)
-		queueSize := len(s.messageQueue[post.ChannelId])
 		s.mutex.WUnlock(common.MutexMessageQueue)
-
-		s.Platform.Log().Debug("SznSearch: Post added to async queue",
-			mlog.String("post_id", post.Id),
-			mlog.String("channel_id", post.ChannelId),
-			mlog.Int("queue_size", queueSize),
-		)
 		return nil
 	}
 
@@ -163,11 +157,6 @@ func (s *SznSearchImpl) DeleteUserPosts(rctx request.CTX, userID string) *model.
 
 // formatPostForIndex converts a post to IndexedMessage format
 func (s *SznSearchImpl) formatPostForIndex(post *model.Post) (*common.IndexedMessage, *model.AppError) {
-	s.Platform.Log().Debug("SznSearch: Formatting post for index",
-		mlog.String("post_id", post.Id),
-		mlog.String("channel_id", post.ChannelId),
-	)
-
 	// Get channel to determine type and members
 	channel, err := s.Platform.Store.Channel().Get(post.ChannelId, true)
 	if err != nil {
@@ -203,10 +192,26 @@ func (s *SznSearchImpl) formatPostForIndex(post *model.Post) (*common.IndexedMes
 		payload += fmt.Sprintf("%s %s ", att.Title, att.Text)
 	}
 
+	// Extract hashtags from post
+	var hashtags []string
+	if post.Hashtags != "" {
+		// Post.Hashtags is a space-separated string like "#tag1 #tag2"
+		// Split and clean them
+		hashtagList := strings.Fields(post.Hashtags)
+		for _, tag := range hashtagList {
+			// Remove the # prefix if present for storage
+			tag = strings.TrimPrefix(tag, "#")
+			if tag != "" {
+				hashtags = append(hashtags, tag)
+			}
+		}
+	}
+
 	return &common.IndexedMessage{
 		ID:          post.Id,
 		Message:     post.Message,
 		Payload:     payload,
+		Hashtags:    hashtags,
 		CreatedAt:   post.CreateAt,
 		ChannelID:   post.ChannelId,
 		ChannelType: channelType,
