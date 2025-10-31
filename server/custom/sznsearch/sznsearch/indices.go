@@ -58,6 +58,9 @@ var messageIndexSettings = map[string]any{
 				"type":     "text",
 				"analyzer": "czech",
 			},
+			"Hashtags": map[string]any{
+				"type": "keyword",
+			},
 			"CreatedAt": map[string]any{
 				"type": "long",
 			},
