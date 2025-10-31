@@ -270,6 +270,9 @@ func (s *SznSearchImpl) Start() *model.AppError {
 	// Start background indexer
 	go s.startIndexer()
 
+	// Register slash command
+	s.RegisterCommand()
+
 	return nil
 }
 
