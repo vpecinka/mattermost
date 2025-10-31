@@ -15,6 +15,7 @@ import (
 // SearchPosts searches for posts in ElasticSearch
 func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*model.SearchParams, page, perPage int) ([]string, model.PostSearchMatches, *model.AppError) {
 	if atomic.LoadInt32(&s.ready) == 0 {
+		s.Platform.Log().Warn("SznSearch.SearchPosts: engine not ready, returning error")
 		return []string{}, nil, model.NewAppError("SznSearch.SearchPosts", "sznsearch.search_posts.disabled", nil, "", http.StatusInternalServerError)
 	}
 
@@ -23,13 +24,6 @@ func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*
 	for _, channel := range channels {
 		channelIds = append(channelIds, channel.Id)
 	}
-
-	s.Platform.Log().Debug("SznSearch: SearchPosts called",
-		mlog.Int("num_channels", len(channelIds)),
-		mlog.Int("num_params", len(searchParams)),
-		mlog.Int("page", page),
-		mlog.Int("per_page", perPage),
-	)
 
 	// Build ElasticSearch query
 	esQuery := s.buildSearchQuery(searchParams, channelIds, page, perPage)
@@ -101,10 +95,6 @@ func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*
 			}
 			if len(terms) > 0 {
 				matches[hit.ID] = terms
-				s.Platform.Log().Debug("SznSearch: Extracted highlight terms",
-					mlog.String("post_id", hit.ID),
-					mlog.Int("num_terms", len(terms)),
-				)
 			}
 		}
 	}
@@ -114,13 +104,6 @@ func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*
 
 // buildSearchQuery constructs an ElasticSearch query from search parameters
 func (s *SznSearchImpl) buildSearchQuery(searchParams []*model.SearchParams, channelIds []string, page, perPage int) map[string]any {
-	s.Platform.Log().Debug("SznSearch: Building search query",
-		mlog.Int("num_params", len(searchParams)),
-		mlog.Int("num_channels", len(channelIds)),
-		mlog.Int("page", page),
-		mlog.Int("per_page", perPage),
-	)
-
 	query := map[string]any{
 		"from": page * perPage,
 		"size": perPage,
@@ -141,6 +124,10 @@ func (s *SznSearchImpl) buildSearchQuery(searchParams []*model.SearchParams, cha
 					"pre_tags":  {"**"},
 					"post_tags": {"**"},
 				},
+				"Hashtags": {
+					"pre_tags":  {"**"},
+					"post_tags": {"**"},
+				},
 			},
 		},
 	}
@@ -150,73 +137,147 @@ func (s *SznSearchImpl) buildSearchQuery(searchParams []*model.SearchParams, cha
 	musts := boolQuery["must"].([]map[string]any)
 	mustNots := boolQuery["must_not"].([]map[string]any)
 
-	// Add channel filter
+	// Add channel filter - security constraint (only search in allowed channels)
 	filters = append(filters, map[string]any{
 		"terms": map[string][]string{"ChannelId": channelIds},
 	})
-	s.Platform.Log().Debug("SznSearch: Added channel filter", mlog.Int("num_channels", len(channelIds)))
 
 	// Process search parameters
 	for i, params := range searchParams {
-		s.Platform.Log().Debug("SznSearch: Processing search param",
-			mlog.Int("param_index", i),
-			mlog.String("terms", params.Terms),
-			mlog.Int("num_from_users", len(params.FromUsers)),
-			mlog.Int("num_excluded_users", len(params.ExcludedUsers)),
-		)
+		// Determine operator based on OrTerms flag
+		operator := "and"
+		if params.OrTerms {
+			operator = "or"
+		}
 
-		// Main search terms
+		// Determine fields based on search type
+		var searchFields []string
+		if params.IsHashtag {
+			// Hashtag search - search only in Hashtags field
+			searchFields = []string{"Hashtags"}
+		} else {
+			// Regular search - search in Message and Payload
+			searchFields = []string{"Message", "Payload"}
+		}
+
+		// Main search terms (process for each item - they can be different)
 		if params.Terms != "" {
 			musts = append(musts, map[string]any{
 				"multi_match": map[string]any{
 					"query":    params.Terms,
-					"fields":   []string{"Message", "Payload"},
-					"operator": "and",
+					"fields":   searchFields,
+					"operator": operator,
 				},
 			})
-		}
-
-		// User filters
-		if len(params.FromUsers) > 0 {
-			filters = append(filters, map[string]any{
-				"terms": map[string][]string{"UserId": params.FromUsers},
+		} else if params.ExcludedTerms != "" {
+			// Pure negative search (only excluded terms, no positive terms)
+			// Add match_all to match all documents, then filter with must_not
+			musts = append(musts, map[string]any{
+				"match_all": map[string]any{},
 			})
 		}
 
-		if len(params.ExcludedUsers) > 0 {
+		// Excluded terms (-word) (process for each item - they can be different)
+		if params.ExcludedTerms != "" {
 			mustNots = append(mustNots, map[string]any{
-				"terms": map[string][]string{"UserId": params.ExcludedUsers},
+				"multi_match": map[string]any{
+					"query":    params.ExcludedTerms,
+					"fields":   searchFields,
+					"operator": operator,
+				},
 			})
 		}
 
-		// Date filters
-		if params.OnDate != "" {
-			before, after := params.GetOnDateMillis()
-			filters = append(filters, map[string]any{
-				"range": map[string]any{
-					"CreatedAt": map[string]int64{
-						"gte": before,
-						"lte": after,
-					},
-				},
-			})
-		} else {
-			if params.AfterDate != "" || params.BeforeDate != "" {
-				rangeFilter := map[string]any{
+		// Global filters - process only once (same for all searchParams items)
+		if i == 0 {
+			// Add user channel filters (in:channel)
+			if len(params.InChannels) > 0 {
+				filters = append(filters, map[string]any{
+					"terms": map[string][]string{"ChannelId": params.InChannels},
+				})
+			}
+			// Exclude channels (-in:channel)
+			if len(params.ExcludedChannels) > 0 {
+				mustNots = append(mustNots, map[string]any{
+					"terms": map[string][]string{"ChannelId": params.ExcludedChannels},
+				})
+			}
+
+			// User filters
+			if len(params.FromUsers) > 0 {
+				filters = append(filters, map[string]any{
+					"terms": map[string][]string{"UserId": params.FromUsers},
+				})
+			}
+
+			if len(params.ExcludedUsers) > 0 {
+				mustNots = append(mustNots, map[string]any{
+					"terms": map[string][]string{"UserId": params.ExcludedUsers},
+				})
+			}
+
+			// Date filters
+			if params.OnDate != "" {
+				before, after := params.GetOnDateMillis()
+				filters = append(filters, map[string]any{
 					"range": map[string]any{
-						"CreatedAt": map[string]any{},
+						"CreatedAt": map[string]int64{
+							"gte": before,
+							"lte": after,
+						},
 					},
-				}
+				})
+			} else {
+				if params.AfterDate != "" || params.BeforeDate != "" {
+					rangeFilter := map[string]any{
+						"range": map[string]any{
+							"CreatedAt": map[string]any{},
+						},
+					}
 
-				if params.AfterDate != "" {
-					rangeFilter["range"].(map[string]any)["CreatedAt"].(map[string]any)["gte"] = params.GetAfterDateMillis()
-				}
+					if params.AfterDate != "" {
+						rangeFilter["range"].(map[string]any)["CreatedAt"].(map[string]any)["gte"] = params.GetAfterDateMillis()
+					}
 
-				if params.BeforeDate != "" {
-					rangeFilter["range"].(map[string]any)["CreatedAt"].(map[string]any)["lte"] = params.GetBeforeDateMillis()
-				}
+					if params.BeforeDate != "" {
+						rangeFilter["range"].(map[string]any)["CreatedAt"].(map[string]any)["lte"] = params.GetBeforeDateMillis()
+					}
 
-				filters = append(filters, rangeFilter)
+					filters = append(filters, rangeFilter)
+				}
+			}
+
+			// Excluded date filters (-after:, -before:, -on:)
+			if params.ExcludedDate != "" {
+				before, after := params.GetExcludedDateMillis()
+				mustNots = append(mustNots, map[string]any{
+					"range": map[string]any{
+						"CreatedAt": map[string]int64{
+							"gte": before,
+							"lte": after,
+						},
+					},
+				})
+			}
+
+			if params.ExcludedAfterDate != "" {
+				mustNots = append(mustNots, map[string]any{
+					"range": map[string]any{
+						"CreatedAt": map[string]int64{
+							"gte": params.GetExcludedAfterDateMillis(),
+						},
+					},
+				})
+			}
+
+			if params.ExcludedBeforeDate != "" {
+				mustNots = append(mustNots, map[string]any{
+					"range": map[string]any{
+						"CreatedAt": map[string]int64{
+							"lte": params.GetExcludedBeforeDateMillis(),
+						},
+					},
+				})
 			}
 		}
 	}
@@ -224,12 +285,6 @@ func (s *SznSearchImpl) buildSearchQuery(searchParams []*model.SearchParams, cha
 	boolQuery["filter"] = filters
 	boolQuery["must"] = musts
 	boolQuery["must_not"] = mustNots
-
-	s.Platform.Log().Debug("SznSearch: Query built",
-		mlog.Int("num_filters", len(filters)),
-		mlog.Int("num_must", len(musts)),
-		mlog.Int("num_must_not", len(mustNots)),
-	)
 
 	return query
 }
