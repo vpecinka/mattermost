@@ -9,7 +9,6 @@ import (
 )
 
 const (
-	reindexBatchSize    = 100
 	reindexChannelLimit = 1000
 )
 
@@ -45,6 +44,12 @@ func (s *SznSearchImpl) FullReindexFromDatabase(rctx request.CTX) *model.AppErro
 
 	// Reindex all teams (iterate over cache keys to get all TeamIDs including "")
 	for teamID := range cache.byTeam {
+		// Fast O(1) check: skip ignored teams
+		if teamID != "" && s.ignoreTeams[teamID] {
+			rctx.Logger().Info("SznSearch: Skipping ignored team", mlog.String("team_id", teamID))
+			continue
+		}
+
 		if teamID == "" {
 			rctx.Logger().Info("SznSearch: Reindexing direct messages and group messages")
 		} else {
@@ -152,6 +157,14 @@ func (s *SznSearchImpl) reindexTeamWithCache(rctx request.CTX, teamID string, ca
 	)
 
 	for _, channel := range channels {
+		// Fast O(1) check: skip ignored channels
+		if s.ignoreChannels[channel.ID] {
+			rctx.Logger().Debug("SznSearch: Skipping ignored channel",
+				mlog.String("channel_id", channel.ID),
+			)
+			continue
+		}
+
 		rctx.Logger().Debug("SznSearch: Reindexing channel",
 			mlog.String("channel_id", channel.ID),
 			mlog.String("channel_type", string(channel.Type)),
@@ -195,8 +208,8 @@ func (s *SznSearchImpl) ReindexChannel(rctx request.CTX, channelID string) *mode
 		// Get posts in batches
 		postList, err := s.Platform.Store.Post().GetPosts(model.GetPostsOptions{
 			ChannelId: channelID,
-			Page:      offset / reindexBatchSize,
-			PerPage:   reindexBatchSize,
+			Page:      offset / s.batchSize,
+			PerPage:   s.batchSize,
 		}, false, map[string]bool{})
 		if err != nil {
 			return model.NewAppError("SznSearch.ReindexChannel", "sznsearch.reindex.get_posts", nil, err.Error(), 500)
@@ -233,10 +246,10 @@ func (s *SznSearchImpl) ReindexChannel(rctx request.CTX, channelID string) *mode
 			totalPosts += len(batch)
 		}
 
-		offset += reindexBatchSize
+		offset += s.batchSize
 
 		// Break if we got less than batch size (no more posts)
-		if len(postList.Posts) < reindexBatchSize {
+		if len(postList.Posts) < s.batchSize {
 			break
 		}
 	}

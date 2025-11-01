@@ -13,14 +13,13 @@ import (
 
 const (
 	indexerTickInterval = 5 * time.Second
-	batchSize           = 100
 )
 
 // startIndexer starts the background indexer worker
 func (s *SznSearchImpl) startIndexer() {
 	s.Platform.Log().Info("SznSearch: Background indexer worker started",
 		mlog.Duration("tick_interval", indexerTickInterval),
-		mlog.Int("batch_size", batchSize),
+		mlog.Int("batch_size", s.batchSize),
 	)
 
 	ticker := time.NewTicker(indexerTickInterval)
@@ -50,23 +49,24 @@ func (s *SznSearchImpl) processMessageQueue() {
 	}
 
 	s.Platform.Log().Debug("SznSearch: Processing message queue",
-		mlog.Int("num_channels", len(s.messageQueue)),
+		mlog.Int("queue_size", len(s.messageQueue)),
 	)
 
-	// Collect batch of messages
-	batch := make([]common.IndexedMessage, 0, batchSize)
-	for channelID, messages := range s.messageQueue {
-		for _, msg := range messages {
-			batch = append(batch, *msg)
-			if len(batch) >= batchSize {
-				break
-			}
-		}
-		// Clear processed messages for this channel
-		delete(s.messageQueue, channelID)
-		if len(batch) >= batchSize {
+	// Collect batch of messages (up to batchSize)
+	batch := make([]common.IndexedMessage, 0, s.batchSize)
+	postIDs := make([]string, 0, s.batchSize)
+
+	for postID, msg := range s.messageQueue {
+		batch = append(batch, *msg)
+		postIDs = append(postIDs, postID)
+		if len(batch) >= s.batchSize {
 			break
 		}
+	}
+
+	// Remove collected messages from queue
+	for _, postID := range postIDs {
+		delete(s.messageQueue, postID)
 	}
 	s.mutex.WUnlock(common.MutexMessageQueue)
 
@@ -80,6 +80,18 @@ func (s *SznSearchImpl) processMessageQueue() {
 		s.Platform.Log().Error("SznSearch: Failed to index message batch",
 			mlog.Err(err),
 			mlog.Int("batch_size", len(batch)),
+		)
+
+		// Return failed messages back to queue
+		s.mutex.WLock(common.MutexMessageQueue)
+		for _, msg := range batch {
+			msgCopy := msg // Copy to avoid pointer issues
+			s.messageQueue[msg.ID] = &msgCopy
+		}
+		s.mutex.WUnlock(common.MutexMessageQueue)
+
+		s.Platform.Log().Info("SznSearch: Returned failed messages to queue",
+			mlog.Int("num_messages", len(batch)),
 		)
 	} else {
 		s.Platform.Log().Debug("SznSearch: Successfully indexed batch", mlog.Int("batch_size", len(batch)))
@@ -117,6 +129,7 @@ func (s *SznSearchImpl) indexMessageBatch(messages []common.IndexedMessage) *mod
 		doc := map[string]any{
 			"Message":     msg.Message,
 			"Payload":     msg.Payload,
+			"Hashtags":    msg.Hashtags,
 			"CreatedAt":   msg.CreatedAt,
 			"ChannelId":   msg.ChannelID,
 			"ChannelType": msg.ChannelType,
@@ -132,8 +145,6 @@ func (s *SznSearchImpl) indexMessageBatch(messages []common.IndexedMessage) *mod
 			return model.NewAppError("SznSearch.indexMessageBatch", "sznsearch.indexer.encode_doc", nil, err.Error(), 500)
 		}
 	}
-
-	s.Platform.Log().Debug("SznSearch: Sending bulk request", mlog.Int("size_bytes", buf.Len()))
 
 	// Execute bulk request
 	res, err := s.client.Bulk(

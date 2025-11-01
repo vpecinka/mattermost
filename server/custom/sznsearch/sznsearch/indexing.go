@@ -19,6 +19,16 @@ func (s *SznSearchImpl) IndexPost(post *model.Post, teamId string) *model.AppErr
 		return nil // Not an error if not started
 	}
 
+	// Fast O(1) check: ignore if channel is in ignore list
+	if s.ignoreChannels[post.ChannelId] {
+		return nil
+	}
+
+	// Fast O(1) check: ignore if team is in ignore list
+	if teamId != "" && s.ignoreTeams[teamId] {
+		return nil
+	}
+
 	s.Platform.Log().Debug("SznSearch: IndexPost called",
 		mlog.String("post_id", post.Id),
 		mlog.String("channel_id", post.ChannelId),
@@ -38,10 +48,7 @@ func (s *SznSearchImpl) IndexPost(post *model.Post, teamId string) *model.AppErr
 	// Add to message queue for async indexing
 	if !s.IsIndexingSync() {
 		s.mutex.WLock(common.MutexMessageQueue)
-		if _, exists := s.messageQueue[post.ChannelId]; !exists {
-			s.messageQueue[post.ChannelId] = make([]*common.IndexedMessage, 0)
-		}
-		s.messageQueue[post.ChannelId] = append(s.messageQueue[post.ChannelId], msg)
+		s.messageQueue[post.Id] = msg
 		s.mutex.WUnlock(common.MutexMessageQueue)
 		return nil
 	}
@@ -199,15 +206,16 @@ func (s *SznSearchImpl) formatPostForIndex(post *model.Post) (*common.IndexedMes
 		// Split and clean them
 		hashtagList := strings.Fields(post.Hashtags)
 		for _, tag := range hashtagList {
-			// Remove the # prefix if present for storage
+			// Remove the # prefix if present and normalize to lowercase for case-insensitive search
 			tag = strings.TrimPrefix(tag, "#")
+			tag = strings.ToLower(tag)
 			if tag != "" {
 				hashtags = append(hashtags, tag)
 			}
 		}
 	}
 
-	return &common.IndexedMessage{
+	indexedMsg := &common.IndexedMessage{
 		ID:          post.Id,
 		Message:     post.Message,
 		Payload:     payload,
@@ -218,5 +226,7 @@ func (s *SznSearchImpl) formatPostForIndex(post *model.Post) (*common.IndexedMes
 		TeamID:      teamID,
 		UserID:      post.UserId,
 		Members:     members,
-	}, nil
+	}
+
+	return indexedMsg, nil
 }
