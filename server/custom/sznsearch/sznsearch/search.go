@@ -150,25 +150,55 @@ func (s *SznSearchImpl) buildSearchQuery(searchParams []*model.SearchParams, cha
 			operator = "or"
 		}
 
-		// Determine fields based on search type
-		var searchFields []string
-		if params.IsHashtag {
-			// Hashtag search - search only in Hashtags field
-			searchFields = []string{"Hashtags"}
-		} else {
-			// Regular search - search in Message and Payload
-			searchFields = []string{"Message", "Payload"}
-		}
-
 		// Main search terms (process for each item - they can be different)
 		if params.Terms != "" {
-			musts = append(musts, map[string]any{
-				"multi_match": map[string]any{
-					"query":    params.Terms,
-					"fields":   searchFields,
-					"operator": operator,
-				},
-			})
+			// Determine fields and query type based on search type
+			if params.IsHashtag {
+				// Hashtag search - use term/terms query on keyword field
+				// Remove # prefix and normalize to lowercase (we store hashtags lowercase)
+				searchTerm := strings.ToLower(strings.TrimPrefix(params.Terms, "#"))
+
+				// Split multiple hashtags (space-separated)
+				hashtagTerms := strings.Fields(searchTerm)
+
+				if len(hashtagTerms) == 1 {
+					// Single hashtag - use term query
+					musts = append(musts, map[string]any{
+						"term": map[string]any{
+							"Hashtags": hashtagTerms[0],
+						},
+					})
+				} else {
+					// Multiple hashtags - use terms query with minimum_should_match
+					if params.OrTerms {
+						// OR: at least one hashtag must match
+						musts = append(musts, map[string]any{
+							"terms": map[string]any{
+								"Hashtags": hashtagTerms,
+							},
+						})
+					} else {
+						// AND: all hashtags must match (add separate term queries)
+						for _, tag := range hashtagTerms {
+							musts = append(musts, map[string]any{
+								"term": map[string]any{
+									"Hashtags": tag,
+								},
+							})
+						}
+					}
+				}
+			} else {
+				// Regular search - search in Message and Payload with multi_match
+				searchFields := []string{"Message", "Payload"}
+				musts = append(musts, map[string]any{
+					"multi_match": map[string]any{
+						"query":    params.Terms,
+						"fields":   searchFields,
+						"operator": operator,
+					},
+				})
+			}
 		} else if params.ExcludedTerms != "" {
 			// Pure negative search (only excluded terms, no positive terms)
 			// Add match_all to match all documents, then filter with must_not
@@ -177,15 +207,50 @@ func (s *SznSearchImpl) buildSearchQuery(searchParams []*model.SearchParams, cha
 			})
 		}
 
-		// Excluded terms (-word) (process for each item - they can be different)
+		// Excluded terms (-word or -#hashtag) (process for each item - they can be different)
 		if params.ExcludedTerms != "" {
-			mustNots = append(mustNots, map[string]any{
-				"multi_match": map[string]any{
-					"query":    params.ExcludedTerms,
-					"fields":   searchFields,
-					"operator": operator,
-				},
-			})
+			if params.IsHashtag {
+				// Excluded hashtag search - normalize to lowercase
+				searchTerm := strings.ToLower(strings.TrimPrefix(params.ExcludedTerms, "#"))
+				hashtagTerms := strings.Fields(searchTerm)
+
+				if len(hashtagTerms) == 1 {
+					mustNots = append(mustNots, map[string]any{
+						"term": map[string]any{
+							"Hashtags": hashtagTerms[0],
+						},
+					})
+				} else {
+					// Multiple excluded hashtags
+					if params.OrTerms {
+						// OR: exclude if any hashtag matches
+						mustNots = append(mustNots, map[string]any{
+							"terms": map[string]any{
+								"Hashtags": hashtagTerms,
+							},
+						})
+					} else {
+						// AND: exclude if all hashtags match
+						for _, tag := range hashtagTerms {
+							mustNots = append(mustNots, map[string]any{
+								"term": map[string]any{
+									"Hashtags": tag,
+								},
+							})
+						}
+					}
+				}
+			} else {
+				// Regular excluded search - search in Message and Payload
+				searchFields := []string{"Message", "Payload"}
+				mustNots = append(mustNots, map[string]any{
+					"multi_match": map[string]any{
+						"query":    params.ExcludedTerms,
+						"fields":   searchFields,
+						"operator": operator,
+					},
+				})
+			}
 		}
 
 		// Global filters - process only once (same for all searchParams items)
