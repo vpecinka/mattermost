@@ -65,13 +65,13 @@ func (p *SznSearchCommandProvider) DoCommand(a *app.App, rctx request.CTX, args 
 		return p.handleFullReindex(a, rctx, args)
 	case "team-reindex":
 		teamID := args.TeamId // Default to current team
-		if len(parts) > 1 && parts[1] != "current" {
+		if len(parts) > 1 {
 			teamID = parts[1]
 		}
 		return p.handleTeamReindex(a, rctx, args, teamID)
 	case "channel-reindex":
 		channelID := args.ChannelId // Default to current channel
-		if len(parts) > 1 && parts[1] != "current" {
+		if len(parts) > 1 {
 			channelID = parts[1]
 		}
 		return p.handleChannelReindex(a, rctx, args, channelID)
@@ -86,10 +86,10 @@ func (p *SznSearchCommandProvider) showHelp() *model.CommandResponse {
 Available commands:
 - **/sznsearch remove-index** - Remove and recreate the search index (System Admin only)
 - **/sznsearch full-reindex** - Reindex all posts from database (System Admin only)
-- **/sznsearch team-reindex [team_id|current]** - Reindex all channels in a team (System Admin or Team Admin for their team)
-- **/sznsearch channel-reindex [channel_id|current]** - Reindex a specific channel (Channel Admin or channel members for DMs/GMs)
+- **/sznsearch team-reindex [team_id]** - Reindex all channels in a team (System Admin or Team Admin for their team)
+- **/sznsearch channel-reindex [channel_id]** - Reindex a specific channel (Channel Admin or channel members for DMs/GMs)
 
-**Note:** Omit team_id/channel_id or use "current" to use the current team/channel.`
+**Note:** Omit team_id/channel_id to use the current team/channel.`
 
 	return &model.CommandResponse{
 		Text:         help,
