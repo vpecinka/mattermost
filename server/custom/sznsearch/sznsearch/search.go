@@ -25,6 +25,25 @@ func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*
 		channelIds = append(channelIds, channel.Id)
 	}
 
+	// Collect search terms for manual matching (especially for hashtags)
+	searchTerms := make(map[string]bool)
+	for _, params := range searchParams {
+		if params.Terms != "" {
+			if params.IsHashtag {
+				// Extract hashtag terms
+				searchTerm := strings.ToLower(strings.TrimPrefix(params.Terms, "#"))
+				for _, term := range strings.Fields(searchTerm) {
+					searchTerms[term] = true
+				}
+			} else {
+				// Extract regular search terms (split by space)
+				for _, term := range strings.Fields(strings.ToLower(params.Terms)) {
+					searchTerms[term] = true
+				}
+			}
+		}
+	}
+
 	// Build ElasticSearch query
 	esQuery := s.buildSearchQuery(searchParams, channelIds, page, perPage)
 
@@ -83,19 +102,64 @@ func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*
 	for _, hit := range result.Hits.Hits {
 		postIds = append(postIds, hit.ID)
 
-		// Extract highlighted terms
+		termSet := make(map[string]bool) // Use set to avoid duplicates
+
+		// Extract highlighted terms from ElasticSearch response
 		if len(hit.Highlight) > 0 {
-			terms := []string{}
-			for _, highlights := range hit.Highlight {
-				for _, highlight := range highlights {
-					// Extract terms from highlight (strip ** markers)
-					cleaned := strings.ReplaceAll(highlight, "**", "")
-					terms = append(terms, cleaned)
+			for fieldName, highlights := range hit.Highlight {
+				s.Platform.Log().Debug("SznSearch: Processing highlight",
+					mlog.String("post_id", hit.ID),
+					mlog.String("field", fieldName),
+					mlog.Int("num_fragments", len(highlights)),
+				)
+
+				for _, fragment := range highlights {
+					// Extract terms between ** markers
+					parts := strings.Split(fragment, "**")
+					for i, part := range parts {
+						// Odd indices contain highlighted terms (between markers)
+						if i%2 == 1 && part != "" {
+							// Normalize: trim spaces and convert to lower for deduplication
+							normalized := strings.TrimSpace(strings.ToLower(part))
+							if normalized != "" {
+								termSet[normalized] = true
+							}
+						}
+					}
 				}
 			}
-			if len(terms) > 0 {
-				matches[hit.ID] = terms
+		}
+
+		// For hashtag searches, also check if any search term appears in the post's hashtags
+		// (since keyword fields don't get highlighted by ElasticSearch)
+		for searchTerm := range searchTerms {
+			// Check in hashtags
+			for _, hashtag := range hit.Source.Hashtags {
+				if strings.Contains(strings.ToLower(hashtag), searchTerm) {
+					termSet[hashtag] = true
+				}
 			}
+			// Also check in message and payload for regular terms
+			if strings.Contains(strings.ToLower(hit.Source.Message), searchTerm) {
+				termSet[searchTerm] = true
+			}
+			if strings.Contains(strings.ToLower(hit.Source.Payload), searchTerm) {
+				termSet[searchTerm] = true
+			}
+		}
+
+		// Convert set to slice
+		if len(termSet) > 0 {
+			terms := make([]string, 0, len(termSet))
+			for term := range termSet {
+				terms = append(terms, term)
+			}
+			matches[hit.ID] = terms
+
+			s.Platform.Log().Debug("SznSearch: Extracted terms",
+				mlog.String("post_id", hit.ID),
+				mlog.Int("num_terms", len(terms)),
+			)
 		}
 	}
 
@@ -119,14 +183,23 @@ func (s *SznSearchImpl) buildSearchQuery(searchParams []*model.SearchParams, cha
 			},
 		},
 		"highlight": map[string]any{
-			"fields": map[string]map[string][]string{
-				"Message": {
-					"pre_tags":  {"**"},
-					"post_tags": {"**"},
+			"pre_tags":  []string{"**"},
+			"post_tags": []string{"**"},
+			"fields": map[string]any{
+				"Message": map[string]any{
+					"type":                "unified",
+					"number_of_fragments": 3,
+					"fragment_size":       150,
 				},
-				"Hashtags": {
-					"pre_tags":  {"**"},
-					"post_tags": {"**"},
+				"Payload": map[string]any{
+					"type":                "unified",
+					"number_of_fragments": 3,
+					"fragment_size":       150,
+				},
+				"Hashtags.text": map[string]any{
+					"type":                "unified",
+					"number_of_fragments": 5,
+					"fragment_size":       50,
 				},
 			},
 		},
@@ -154,7 +227,7 @@ func (s *SznSearchImpl) buildSearchQuery(searchParams []*model.SearchParams, cha
 		if params.Terms != "" {
 			// Determine fields and query type based on search type
 			if params.IsHashtag {
-				// Hashtag search - use term/terms query on keyword field
+				// Hashtag search - use bool query with should clause to match both exact keyword and text analysis
 				// Remove # prefix and normalize to lowercase (we store hashtags lowercase)
 				searchTerm := strings.ToLower(strings.TrimPrefix(params.Terms, "#"))
 
@@ -162,10 +235,22 @@ func (s *SznSearchImpl) buildSearchQuery(searchParams []*model.SearchParams, cha
 				hashtagTerms := strings.Fields(searchTerm)
 
 				if len(hashtagTerms) == 1 {
-					// Single hashtag - use term query
+					// Single hashtag - use bool query combining exact match with text match for highlighting
 					musts = append(musts, map[string]any{
-						"term": map[string]any{
-							"Hashtags": hashtagTerms[0],
+						"bool": map[string]any{
+							"should": []map[string]any{
+								{
+									"term": map[string]any{
+										"Hashtags": hashtagTerms[0],
+									},
+								},
+								{
+									"match": map[string]any{
+										"Hashtags.text": hashtagTerms[0],
+									},
+								},
+							},
+							"minimum_should_match": 1,
 						},
 					})
 				} else {
@@ -173,16 +258,42 @@ func (s *SznSearchImpl) buildSearchQuery(searchParams []*model.SearchParams, cha
 					if params.OrTerms {
 						// OR: at least one hashtag must match
 						musts = append(musts, map[string]any{
-							"terms": map[string]any{
-								"Hashtags": hashtagTerms,
+							"bool": map[string]any{
+								"should": []map[string]any{
+									{
+										"terms": map[string]any{
+											"Hashtags": hashtagTerms,
+										},
+									},
+									{
+										"multi_match": map[string]any{
+											"query":    searchTerm,
+											"fields":   []string{"Hashtags.text"},
+											"operator": "or",
+										},
+									},
+								},
+								"minimum_should_match": 1,
 							},
 						})
 					} else {
 						// AND: all hashtags must match (add separate term queries)
 						for _, tag := range hashtagTerms {
 							musts = append(musts, map[string]any{
-								"term": map[string]any{
-									"Hashtags": tag,
+								"bool": map[string]any{
+									"should": []map[string]any{
+										{
+											"term": map[string]any{
+												"Hashtags": tag,
+											},
+										},
+										{
+											"match": map[string]any{
+												"Hashtags.text": tag,
+											},
+										},
+									},
+									"minimum_should_match": 1,
 								},
 							})
 						}

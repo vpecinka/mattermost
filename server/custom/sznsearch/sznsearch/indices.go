@@ -60,6 +60,12 @@ var messageIndexSettings = map[string]any{
 			},
 			"Hashtags": map[string]any{
 				"type": "keyword",
+				"fields": map[string]any{
+					"text": map[string]any{
+						"type":     "text",
+						"analyzer": "standard",
+					},
+				},
 			},
 			"CreatedAt": map[string]any{
 				"type": "long",
