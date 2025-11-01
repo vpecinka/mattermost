@@ -3420,13 +3420,6 @@ type SznSearchSettings struct {
 	EnableIndexing        *bool
 	EnableSearching       *bool
 	EnableAutocomplete    *bool
-	PostIndexReplicas     *int
-	PostIndexShards       *int
-	ChannelIndexReplicas  *int
-	ChannelIndexShards    *int
-	UserIndexReplicas     *int
-	UserIndexShards       *int
-	IndexPrefix           *string
 	LiveIndexingBatchSize *int
 	BatchSize             *int
 	RequestTimeoutSeconds *int
@@ -3434,6 +3427,8 @@ type SznSearchSettings struct {
 	CA                    *string
 	ClientCert            *string
 	ClientKey             *string
+	IgnoreChannels        *string
+	IgnoreTeams           *string
 }
 
 func (s *SznSearchSettings) SetDefaults() {
@@ -3473,34 +3468,6 @@ func (s *SznSearchSettings) SetDefaults() {
 		s.EnableAutocomplete = NewPointer(false)
 	}
 
-	if s.PostIndexReplicas == nil {
-		s.PostIndexReplicas = NewPointer(1)
-	}
-
-	if s.PostIndexShards == nil {
-		s.PostIndexShards = NewPointer(1)
-	}
-
-	if s.ChannelIndexReplicas == nil {
-		s.ChannelIndexReplicas = NewPointer(1)
-	}
-
-	if s.ChannelIndexShards == nil {
-		s.ChannelIndexShards = NewPointer(1)
-	}
-
-	if s.UserIndexReplicas == nil {
-		s.UserIndexReplicas = NewPointer(1)
-	}
-
-	if s.UserIndexShards == nil {
-		s.UserIndexShards = NewPointer(1)
-	}
-
-	if s.IndexPrefix == nil {
-		s.IndexPrefix = NewPointer("")
-	}
-
 	if s.LiveIndexingBatchSize == nil {
 		s.LiveIndexingBatchSize = NewPointer(1)
 	}
@@ -3515,6 +3482,14 @@ func (s *SznSearchSettings) SetDefaults() {
 
 	if s.SkipTLSVerification == nil {
 		s.SkipTLSVerification = NewPointer(false)
+	}
+
+	if s.IgnoreChannels == nil {
+		s.IgnoreChannels = NewPointer("")
+	}
+
+	if s.IgnoreTeams == nil {
+		s.IgnoreTeams = NewPointer("")
 	}
 }
 

@@ -5,7 +5,9 @@ import (
 	"crypto/x509"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/mattermost/mattermost/server/public/model"
@@ -31,11 +33,11 @@ type SznSearchImpl struct {
 	stopChan     chan struct{}
 
 	// Indexer state
-	messageQueue     map[string][]*common.IndexedMessage
+	messageQueue     map[string]*common.IndexedMessage // postId -> IndexedMessage
 	workerState      string
 	batchSize        int
-	limitToTeams     map[string]bool
-	ignoreChannels   map[string]bool
+	ignoreChannels   map[string]bool // channelId -> true (for fast O(1) lookup)
+	ignoreTeams      map[string]bool // teamId -> true (for fast O(1) lookup)
 	indexerWorkers   int
 	reindexOnStartup bool
 }
@@ -99,16 +101,47 @@ func (s *SznSearchImpl) GetPlugins() []string {
 func NewSznSearchEngine(ps *platform.PlatformService) *SznSearchImpl {
 	ps.Log().Info("SznSearch: Creating new engine instance")
 
+	cfg := ps.Config().SznSearchSettings
+
+	// Parse ignore channels (comma-separated channelIds)
+	ignoreChannels := make(map[string]bool)
+	if *cfg.IgnoreChannels != "" {
+		for _, channelID := range strings.Split(*cfg.IgnoreChannels, ",") {
+			trimmed := strings.TrimSpace(channelID)
+			if trimmed != "" {
+				ignoreChannels[trimmed] = true
+			}
+		}
+	}
+
+	// Parse ignore teams (comma-separated teamIds)
+	ignoreTeams := make(map[string]bool)
+	if *cfg.IgnoreTeams != "" {
+		for _, teamID := range strings.Split(*cfg.IgnoreTeams, ",") {
+			trimmed := strings.TrimSpace(teamID)
+			if trimmed != "" {
+				ignoreTeams[trimmed] = true
+			}
+		}
+	}
+
+	ps.Log().Info("SznSearch: Configuration loaded",
+		mlog.Int("ignored_channels", len(ignoreChannels)),
+		mlog.Int("ignored_teams", len(ignoreTeams)),
+		mlog.Int("batch_size", *cfg.BatchSize),
+		mlog.Int("request_timeout", *cfg.RequestTimeoutSeconds),
+	)
+
 	return &SznSearchImpl{
 		Platform:         ps,
 		mutex:            common.NewKeyedMutex(),
 		channelMutex:     common.NewKeyedMutex(),
 		stopChan:         make(chan struct{}),
-		messageQueue:     make(map[string][]*common.IndexedMessage),
+		messageQueue:     make(map[string]*common.IndexedMessage),
 		workerState:      common.WorkerStateStopped,
-		batchSize:        100,
-		limitToTeams:     make(map[string]bool),
-		ignoreChannels:   make(map[string]bool),
+		batchSize:        *cfg.BatchSize,
+		ignoreChannels:   ignoreChannels,
+		ignoreTeams:      ignoreTeams,
 		indexerWorkers:   4,
 		reindexOnStartup: false,
 	}
@@ -157,12 +190,14 @@ func (s *SznSearchImpl) createClient() (*elasticsearch.Client, error) {
 			InsecureSkipVerify: *cfg.SkipTLSVerification,
 		}
 
-		// Create a custom HTTP transport
+		// Create a custom HTTP transport with TLS and timeout
+		timeout := time.Duration(*cfg.RequestTimeoutSeconds) * time.Second
 		transport := &http.Transport{
-			TLSClientConfig:     tlsConfig,
-			DisableKeepAlives:   false,
-			MaxConnsPerHost:     10,
-			MaxIdleConnsPerHost: 10,
+			TLSClientConfig:       tlsConfig,
+			ResponseHeaderTimeout: timeout,
+			DisableKeepAlives:     false,
+			MaxConnsPerHost:       10,
+			MaxIdleConnsPerHost:   10,
 		}
 
 		// Set up the Elasticsearch client with the custom transport
@@ -170,18 +205,35 @@ func (s *SznSearchImpl) createClient() (*elasticsearch.Client, error) {
 			Addresses: []string{*cfg.ConnectionURL},
 			Transport: transport,
 		}
+
+		s.Platform.Log().Info("SznSearch: ElasticSearch client configured",
+			mlog.Duration("request_timeout", timeout),
+		)
 	} else {
 		s.Platform.Log().Info("SznSearch: Using username/password authentication",
 			mlog.String("username", *cfg.Username),
 			mlog.String("connection_url", *cfg.ConnectionURL),
 		)
 
-		// Fallback to username and password authentication
+		// Fallback to username and password authentication with timeout
+		timeout := time.Duration(*cfg.RequestTimeoutSeconds) * time.Second
+		transport := &http.Transport{
+			ResponseHeaderTimeout: timeout,
+			DisableKeepAlives:     false,
+			MaxConnsPerHost:       10,
+			MaxIdleConnsPerHost:   10,
+		}
+
 		config = elasticsearch.Config{
 			Addresses: []string{*cfg.ConnectionURL},
 			Username:  *cfg.Username,
 			Password:  *cfg.Password,
+			Transport: transport,
 		}
+
+		s.Platform.Log().Info("SznSearch: ElasticSearch client configured",
+			mlog.Duration("request_timeout", timeout),
+		)
 	}
 
 	client, err := elasticsearch.NewClient(config)
