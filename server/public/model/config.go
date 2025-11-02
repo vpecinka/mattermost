@@ -3172,6 +3172,7 @@ type SznSearchSettings struct {
 	IgnoreChannels        *string
 	IgnoreTeams           *string
 	ReindexChannelPool    *int
+	MessageQueueSize      *int
 }
 
 func (s *SznSearchSettings) SetDefaults() {
@@ -3237,6 +3238,10 @@ func (s *SznSearchSettings) SetDefaults() {
 
 	if s.ReindexChannelPool == nil {
 		s.ReindexChannelPool = NewPointer(20)
+	}
+
+	if s.MessageQueueSize == nil {
+		s.MessageQueueSize = NewPointer(10000)
 	}
 }
 
