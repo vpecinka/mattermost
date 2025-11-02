@@ -139,3 +139,23 @@ func (r *ReindexInfo) GetKey() string {
 	}
 	return string(r.Type) + ":" + r.TargetID
 }
+
+// SznSearchSettings holds configuration for the SznSearch engine
+type SznSearchSettings struct {
+	EnableIndexing        *bool   `json:"EnableIndexing"`
+	EnableSearching       *bool   `json:"EnableSearching"`
+	EnableAutocomplete    *bool   `json:"EnableAutocomplete"`
+	IgnoreChannels        *string `json:"IgnoreChannels"`
+	IgnoreTeams           *string `json:"IgnoreTeams"`
+	BatchSize             *int    `json:"BatchSize"`
+	RequestTimeoutSeconds *int    `json:"RequestTimeoutSeconds"`
+	ReindexChannelPool    *int    `json:"ReindexChannelPool"`
+	ClientCert            *string `json:"ClientCert"`
+	ClientKey             *string `json:"ClientKey"`
+	CA                    *string `json:"CA"`
+	SkipTLSVerification   *bool   `json:"SkipTLSVerification"`
+	ConnectionURL         *string `json:"ConnectionURL"`
+	Username              *string `json:"Username"`
+	Password              *string `json:"Password"`
+	MessageQueueSize      *int    `json:"MessageQueueSize"` // Maximum size of the message queue
+}
