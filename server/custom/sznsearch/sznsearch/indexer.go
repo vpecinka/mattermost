@@ -38,7 +38,13 @@ func (s *SznSearchImpl) startIndexer() {
 
 // processMessageQueue processes messages from the queue and indexes them
 func (s *SznSearchImpl) processMessageQueue() {
-	if !s.IsActive() {
+	if !s.IsIndexingEnabled() {
+		return
+	}
+
+	// Check backend health before processing - retry with backoff if unhealthy
+	if !s.isBackendHealthy() {
+		s.Platform.Log().Debug("SznSearch: Backend unhealthy, skipping queue processing")
 		return
 	}
 
@@ -154,6 +160,7 @@ func (s *SznSearchImpl) indexMessageBatch(messages []common.IndexedMessage) *mod
 	)
 	if err != nil {
 		s.Platform.Log().Error("SznSearch: Bulk request failed", mlog.Err(err))
+		s.markUnhealthy()
 		return model.NewAppError("SznSearch.indexMessageBatch", "sznsearch.indexer.bulk_error", nil, err.Error(), 500)
 	}
 	defer res.Body.Close()
@@ -163,6 +170,10 @@ func (s *SznSearchImpl) indexMessageBatch(messages []common.IndexedMessage) *mod
 			mlog.Int("status_code", res.StatusCode),
 			mlog.String("response", res.String()),
 		)
+		// Mark ES as unhealthy on 5xx errors or connection issues
+		if res.StatusCode >= 500 {
+			s.markUnhealthy()
+		}
 		return model.NewAppError("SznSearch.indexMessageBatch", "sznsearch.indexer.bulk_es_error", nil, res.String(), 500)
 	}
 

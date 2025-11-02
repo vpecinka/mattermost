@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"sync/atomic"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/shared/mlog"
@@ -14,9 +13,14 @@ import (
 
 // SearchPosts searches for posts in ElasticSearch
 func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*model.SearchParams, page, perPage int) ([]string, model.PostSearchMatches, *model.AppError) {
-	if atomic.LoadInt32(&s.ready) == 0 {
-		s.Platform.Log().Warn("SznSearch.SearchPosts: engine not ready, returning error")
+	if !s.IsSearchEnabled() {
+		s.Platform.Log().Warn("SznSearch.SearchPosts: search not enabled, returning error")
 		return []string{}, nil, model.NewAppError("SznSearch.SearchPosts", "sznsearch.search_posts.disabled", nil, "", http.StatusInternalServerError)
+	}
+
+	if !s.isBackendHealthy() {
+		s.Platform.Log().Warn("SznSearch.SearchPosts: ES backend unhealthy, returning error")
+		return []string{}, nil, model.NewAppError("SznSearch.SearchPosts", "sznsearch.search_posts.backend_unhealthy", nil, "", http.StatusServiceUnavailable)
 	}
 
 	// Extract channel IDs
@@ -63,6 +67,7 @@ func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*
 	)
 	if err != nil {
 		s.Platform.Log().Error("SznSearch: Search request failed", mlog.Err(err))
+		s.markUnhealthy()
 		return nil, nil, model.NewAppError("SznSearch.SearchPosts", "sznsearch.search_posts.error", nil, err.Error(), http.StatusInternalServerError)
 	}
 	defer res.Body.Close()
@@ -72,6 +77,10 @@ func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*
 			mlog.Int("status_code", res.StatusCode),
 			mlog.String("response", res.String()),
 		)
+		// Mark ES as unhealthy on 5xx errors or connection issues
+		if res.StatusCode >= 500 {
+			s.markUnhealthy()
+		}
 		return nil, nil, model.NewAppError("SznSearch.SearchPosts", "sznsearch.search_posts.es_error", nil, res.String(), http.StatusInternalServerError)
 	}
 
