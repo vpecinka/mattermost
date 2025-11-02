@@ -44,6 +44,16 @@ func (s *SznSearchImpl) IndexPost(post *model.Post, teamId string) *model.AppErr
 		return err
 	}
 
+	// Check if the message queue size exceeds the limit
+	if len(s.messageQueue) >= *s.Platform.Config().SznSearchSettings.MessageQueueSize {
+		s.Platform.Log().Error("SznSearch: Message queue is full, dropping message",
+			mlog.String("post_id", post.Id),
+			mlog.String("channel_id", post.ChannelId),
+			mlog.String("user_id", post.UserId),
+		)
+		return model.NewAppError("SznSearch.IndexPost", "sznsearch.index_post.queue_full", nil, "Message queue is full", http.StatusTooManyRequests)
+	}
+
 	// Add to message queue for async indexing (always async)
 	s.mutex.WLock(common.MutexMessageQueue)
 	s.messageQueue[post.Id] = msg
