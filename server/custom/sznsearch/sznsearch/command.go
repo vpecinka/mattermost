@@ -6,12 +6,14 @@ package sznsearch
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/shared/i18n"
 	"github.com/mattermost/mattermost/server/public/shared/mlog"
 	"github.com/mattermost/mattermost/server/public/shared/request"
 	"github.com/mattermost/mattermost/server/v8/channels/app"
+	"github.com/mattermost/mattermost/server/v8/custom/sznsearch/common"
 )
 
 const (
@@ -80,6 +82,57 @@ func (p *SznSearchCommandProvider) DoCommand(a *app.App, rctx request.CTX, args 
 	}
 }
 
+// formatReindexError formats an error message about a running reindex operation
+func (p *SznSearchCommandProvider) formatReindexError(a *app.App, info *common.ReindexInfo) string {
+	var reindexType string
+	var target string
+
+	switch info.Type {
+	case common.ReindexTypeFull:
+		reindexType = "Full reindex"
+		target = "all data"
+	case common.ReindexTypeTeam:
+		reindexType = "Team reindex"
+		if team, err := p.engine.Platform.Store.Team().Get(info.TargetID); err == nil {
+			target = fmt.Sprintf("team **%s**", team.DisplayName)
+		} else {
+			target = fmt.Sprintf("team `%s`", info.TargetID)
+		}
+	case common.ReindexTypeChannel:
+		reindexType = "Channel reindex"
+		if channel, err := p.engine.Platform.Store.Channel().Get(info.TargetID, true); err == nil {
+			channelName := channel.DisplayName
+			if channelName == "" {
+				channelName = channel.Name
+			}
+			target = fmt.Sprintf("channel **%s**", channelName)
+		} else {
+			target = fmt.Sprintf("channel `%s`", info.TargetID)
+		}
+	default:
+		reindexType = "Reindex"
+		target = "unknown target"
+	}
+
+	// Get user info
+	userName := "Unknown user"
+	if user, err := a.GetUser(info.UserID); err == nil {
+		userName = fmt.Sprintf("@%s", user.Username)
+	}
+
+	// Format timestamp
+	startTime := time.Unix(info.StartedAt, 0)
+	timeStr := startTime.Format("02.01.2006 15:04")
+
+	return fmt.Sprintf(
+		"**Error:** %s is already running for %s.\n\nStarted by %s on %s.\n\nPlease wait for it to complete before starting another reindex operation.",
+		reindexType,
+		target,
+		userName,
+		timeStr,
+	)
+}
+
 func (p *SznSearchCommandProvider) showHelp() *model.CommandResponse {
 	help := `### SznSearch Management Commands
 
@@ -134,14 +187,23 @@ func (p *SznSearchCommandProvider) handleFullReindex(a *app.App, rctx request.CT
 		}
 	}
 
+	// Check if a reindex is already running
+	if runningInfo := p.engine.getRunningReindex(); runningInfo != nil {
+		return &model.CommandResponse{
+			Text:         p.formatReindexError(a, runningInfo),
+			ResponseType: model.CommandResponseTypeEphemeral,
+		}
+	}
+
 	rctx.Logger().Info("SznSearch: User requested full reindex",
 		mlog.String("user_id", args.UserId),
 	)
 
 	// Start async reindexing
+	userID := args.UserId
 	go func() {
 		ctx := request.EmptyContext(rctx.Logger())
-		if err := p.engine.FullReindexFromDatabase(ctx); err != nil {
+		if err := p.engine.FullReindexFromDatabase(ctx, userID); err != nil {
 			rctx.Logger().Error("SznSearch: Full reindex failed", mlog.Err(err))
 		} else {
 			rctx.Logger().Info("SznSearch: Full reindex completed successfully")
@@ -182,6 +244,14 @@ func (p *SznSearchCommandProvider) handleTeamReindex(a *app.App, rctx request.CT
 		}
 	}
 
+	// Check if a reindex is already running
+	if runningInfo := p.engine.getRunningReindex(); runningInfo != nil {
+		return &model.CommandResponse{
+			Text:         p.formatReindexError(a, runningInfo),
+			ResponseType: model.CommandResponseTypeEphemeral,
+		}
+	}
+
 	rctx.Logger().Info("SznSearch: User requested team reindex",
 		mlog.String("user_id", args.UserId),
 		mlog.String("team_id", teamID),
@@ -189,9 +259,10 @@ func (p *SznSearchCommandProvider) handleTeamReindex(a *app.App, rctx request.CT
 	)
 
 	// Start async reindexing
+	userID := args.UserId
 	go func() {
 		ctx := request.EmptyContext(rctx.Logger())
-		if err := p.engine.ReindexTeam(ctx, teamID); err != nil {
+		if err := p.engine.ReindexTeam(ctx, teamID, userID); err != nil {
 			rctx.Logger().Error("SznSearch: Team reindex failed",
 				mlog.String("team_id", teamID),
 				mlog.Err(err),
@@ -255,6 +326,14 @@ func (p *SznSearchCommandProvider) handleChannelReindex(a *app.App, rctx request
 		}
 	}
 
+	// Check if a reindex is already running
+	if runningInfo := p.engine.getRunningReindex(); runningInfo != nil {
+		return &model.CommandResponse{
+			Text:         p.formatReindexError(a, runningInfo),
+			ResponseType: model.CommandResponseTypeEphemeral,
+		}
+	}
+
 	rctx.Logger().Info("SznSearch: User requested channel reindex",
 		mlog.String("user_id", args.UserId),
 		mlog.String("channel_id", channelID),
@@ -262,9 +341,10 @@ func (p *SznSearchCommandProvider) handleChannelReindex(a *app.App, rctx request
 	)
 
 	// Start async reindexing
+	userID := args.UserId
 	go func() {
 		ctx := request.EmptyContext(rctx.Logger())
-		if err := p.engine.ReindexChannel(ctx, channelID); err != nil {
+		if err := p.engine.ReindexChannel(ctx, channelID, userID); err != nil {
 			rctx.Logger().Error("SznSearch: Channel reindex failed",
 				mlog.String("channel_id", channelID),
 				mlog.Err(err),

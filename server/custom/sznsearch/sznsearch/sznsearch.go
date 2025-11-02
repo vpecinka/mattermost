@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -40,6 +41,10 @@ type SznSearchImpl struct {
 	ignoreTeams      map[string]bool // teamId -> true (for fast O(1) lookup)
 	indexerWorkers   int
 	reindexOnStartup bool
+
+	// Reindex state tracking
+	reindexMutex   sync.RWMutex
+	runningReindex *common.ReindexInfo // nil if no reindex is running
 }
 
 // UpdateConfig updates the engine configuration
@@ -352,4 +357,64 @@ func (s *SznSearchImpl) Stop() *model.AppError {
 	s.Platform.Log().Info("SznSearch engine stopped")
 
 	return nil
+}
+
+// startReindex attempts to start a reindex operation
+// Returns an error if another reindex is already running
+func (s *SznSearchImpl) startReindex(info *common.ReindexInfo) *model.AppError {
+	s.reindexMutex.Lock()
+	defer s.reindexMutex.Unlock()
+
+	if s.runningReindex != nil {
+		return model.NewAppError(
+			"SznSearch.startReindex",
+			"sznsearch.reindex.already_running",
+			map[string]any{
+				"Type":      s.runningReindex.Type,
+				"TargetID":  s.runningReindex.TargetID,
+				"UserID":    s.runningReindex.UserID,
+				"StartedAt": s.runningReindex.StartedAt,
+			},
+			"Another reindex operation is already running",
+			http.StatusConflict,
+		)
+	}
+
+	s.runningReindex = info
+	s.Platform.Log().Info("SznSearch: Reindex started",
+		mlog.String("type", string(info.Type)),
+		mlog.String("target_id", info.TargetID),
+		mlog.String("user_id", info.UserID),
+	)
+
+	return nil
+}
+
+// stopReindex marks the current reindex operation as completed
+func (s *SznSearchImpl) stopReindex() {
+	s.reindexMutex.Lock()
+	defer s.reindexMutex.Unlock()
+
+	if s.runningReindex != nil {
+		s.Platform.Log().Info("SznSearch: Reindex completed",
+			mlog.String("type", string(s.runningReindex.Type)),
+			mlog.String("target_id", s.runningReindex.TargetID),
+		)
+		s.runningReindex = nil
+	}
+}
+
+// getRunningReindex returns information about the currently running reindex
+// Returns nil if no reindex is running
+func (s *SznSearchImpl) getRunningReindex() *common.ReindexInfo {
+	s.reindexMutex.RLock()
+	defer s.reindexMutex.RUnlock()
+
+	if s.runningReindex == nil {
+		return nil
+	}
+
+	// Return a copy to avoid data races
+	infoCopy := *s.runningReindex
+	return &infoCopy
 }

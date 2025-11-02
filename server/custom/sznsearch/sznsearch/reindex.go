@@ -1,6 +1,8 @@
 package sznsearch
 
 import (
+	"time"
+
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/shared/mlog"
 	"github.com/mattermost/mattermost/server/public/shared/request"
@@ -25,10 +27,23 @@ type channelsCache struct {
 }
 
 // FullReindexFromDatabase performs a full reindex of all posts from the database
-func (s *SznSearchImpl) FullReindexFromDatabase(rctx request.CTX) *model.AppError {
+func (s *SznSearchImpl) FullReindexFromDatabase(rctx request.CTX, userID string) *model.AppError {
 	if !s.IsActive() {
 		return model.NewAppError("SznSearch.FullReindexFromDatabase", "sznsearch.reindex.not_active", nil, "", 500)
 	}
+
+	// Try to start reindex - this will fail if another reindex is already running
+	reindexInfo := &common.ReindexInfo{
+		Type:      common.ReindexTypeFull,
+		TargetID:  "",
+		UserID:    userID,
+		StartedAt: time.Now().Unix(),
+	}
+
+	if err := s.startReindex(reindexInfo); err != nil {
+		return err
+	}
+	defer s.stopReindex()
 
 	rctx.Logger().Info("SznSearch: Starting full database reindex")
 
@@ -121,7 +136,20 @@ func (s *SznSearchImpl) buildChannelsCache(rctx request.CTX) (*channelsCache, *m
 
 // ReindexTeam reindexes all channels in a team
 // Pass empty teamID ("") to reindex all DM/GM channels
-func (s *SznSearchImpl) ReindexTeam(rctx request.CTX, teamID string) *model.AppError {
+func (s *SznSearchImpl) ReindexTeam(rctx request.CTX, teamID, userID string) *model.AppError {
+	// Try to start reindex - this will fail if another reindex is already running
+	reindexInfo := &common.ReindexInfo{
+		Type:      common.ReindexTypeTeam,
+		TargetID:  teamID,
+		UserID:    userID,
+		StartedAt: time.Now().Unix(),
+	}
+
+	if err := s.startReindex(reindexInfo); err != nil {
+		return err
+	}
+	defer s.stopReindex()
+
 	// Build cache for single team reindex (slash command usage)
 	cache, err := s.buildChannelsCache(rctx)
 	if err != nil {
@@ -170,7 +198,7 @@ func (s *SznSearchImpl) reindexTeamWithCache(rctx request.CTX, teamID string, ca
 			mlog.String("channel_type", string(channel.Type)),
 		)
 
-		if err := s.ReindexChannel(rctx, channel.ID); err != nil {
+		if err := s.reindexChannelInternal(rctx, channel.ID); err != nil {
 			rctx.Logger().Error("SznSearch: Failed to reindex channel",
 				mlog.String("channel_id", channel.ID),
 				mlog.Err(err),
@@ -194,11 +222,30 @@ func (s *SznSearchImpl) reindexTeamWithCache(rctx request.CTX, teamID string, ca
 }
 
 // ReindexChannel reindexes all posts in a channel
-func (s *SznSearchImpl) ReindexChannel(rctx request.CTX, channelID string) *model.AppError {
+func (s *SznSearchImpl) ReindexChannel(rctx request.CTX, channelID, userID string) *model.AppError {
 	if !s.IsActive() {
 		return model.NewAppError("SznSearch.ReindexChannel", "sznsearch.reindex.not_active", nil, "", 500)
 	}
 
+	// Try to start reindex - this will fail if another reindex is already running
+	reindexInfo := &common.ReindexInfo{
+		Type:      common.ReindexTypeChannel,
+		TargetID:  channelID,
+		UserID:    userID,
+		StartedAt: time.Now().Unix(),
+	}
+
+	if err := s.startReindex(reindexInfo); err != nil {
+		return err
+	}
+	defer s.stopReindex()
+
+	return s.reindexChannelInternal(rctx, channelID)
+}
+
+// reindexChannelInternal performs the actual channel reindex without state checking
+// This is used internally by full/team reindex operations
+func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID string) *model.AppError {
 	rctx.Logger().Debug("SznSearch: Starting channel reindex", mlog.String("channel_id", channelID))
 
 	offset := 0
