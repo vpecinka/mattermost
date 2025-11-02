@@ -121,6 +121,7 @@ const (
 	ReindexTypeFull    ReindexType = "full"
 	ReindexTypeTeam    ReindexType = "team"
 	ReindexTypeChannel ReindexType = "channel"
+	ReindexTypeDelta   ReindexType = "delta"
 )
 
 // ReindexInfo tracks information about a running reindex operation
