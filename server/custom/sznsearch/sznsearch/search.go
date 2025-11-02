@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/shared/mlog"
@@ -59,50 +60,52 @@ func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*
 
 	s.Platform.Log().Debug("SznSearch: Executing query", mlog.String("query", buf.String()))
 
-	// Execute search
-	res, err := s.client.Search(
-		s.client.Search.WithIndex(common.MessageIndex),
-		s.client.Search.WithBody(&buf),
-		s.client.Search.WithTrackTotalHits(true),
-	)
-	if err != nil {
-		s.Platform.Log().Error("SznSearch: Search request failed", mlog.Err(err))
-		s.markUnhealthy()
-		return nil, nil, model.NewAppError("SznSearch.SearchPosts", "sznsearch.search_posts.error", nil, err.Error(), http.StatusInternalServerError)
-	}
-	defer res.Body.Close()
-
-	if res.IsError() {
-		s.Platform.Log().Error("SznSearch: ElasticSearch error",
-			mlog.Int("status_code", res.StatusCode),
-			mlog.String("response", res.String()),
-		)
-		// Mark ES as unhealthy on 5xx errors or connection issues
-		if res.StatusCode >= 500 {
-			s.markUnhealthy()
-		}
-		return nil, nil, model.NewAppError("SznSearch.SearchPosts", "sznsearch.search_posts.es_error", nil, res.String(), http.StatusInternalServerError)
-	}
-
-	// Parse response
+	// Execute search with retry + backoff
 	var result struct {
 		Hits struct {
 			Hits []struct {
 				ID        string                `json:"_id"`
 				Source    common.IndexedMessage `json:"_source"`
+				Score     float64               `json:"_score"`
 				Highlight map[string][]string   `json:"highlight"`
 			} `json:"hits"`
 		} `json:"hits"`
 	}
 
-	if err := json.NewDecoder(res.Body).Decode(&result); err != nil {
-		s.Platform.Log().Error("SznSearch: Failed to decode search response", mlog.Err(err))
-		return nil, nil, model.NewAppError("SznSearch.SearchPosts", "sznsearch.search_posts.decode", nil, err.Error(), http.StatusInternalServerError)
+	err := common.RetryWithBackoff(3, 500*time.Millisecond, 5*time.Second, s.Platform.Log(), func() error {
+		bufCopy := bytes.NewBuffer(buf.Bytes())
+		res, searchErr := s.client.Search(
+			s.client.Search.WithIndex(common.MessageIndex),
+			s.client.Search.WithBody(bufCopy),
+			s.client.Search.WithTrackTotalHits(true),
+		)
+		if searchErr != nil {
+			return searchErr
+		}
+		defer res.Body.Close()
+
+		if res.IsError() {
+			if res.StatusCode >= 500 {
+				return model.NewAppError("SearchPosts", "es_error", nil, res.String(), res.StatusCode)
+			}
+			// 4xx errors don't trigger retry
+			return model.NewAppError("SearchPosts", "es_client_error", nil, res.String(), res.StatusCode)
+		}
+
+		// Parse response
+		if parseErr := json.NewDecoder(res.Body).Decode(&result); parseErr != nil {
+			return parseErr
+		}
+		return nil
+	})
+
+	if err != nil {
+		s.Platform.Log().Error("SznSearch: Search request failed after retries", mlog.Err(err))
+		s.circuitBreaker.RecordFailure()
+		return nil, nil, model.NewAppError("SznSearch.SearchPosts", "sznsearch.search_posts.error", nil, err.Error(), http.StatusInternalServerError)
 	}
 
-	s.Platform.Log().Debug("SznSearch: Search results received",
-		mlog.Int("num_hits", len(result.Hits.Hits)),
-	)
+	s.circuitBreaker.RecordSuccess()
 
 	// Extract post IDs and matches
 	postIds := make([]string, 0, len(result.Hits.Hits))

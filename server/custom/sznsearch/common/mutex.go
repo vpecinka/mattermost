@@ -5,10 +5,7 @@ import (
 )
 
 const (
-	MutexNewESClient   = "new_es_client"
-	MutexWorkerState   = "worker_state"
-	MutexMessageQueue  = "message_queue"
-	MutexChannelPrefix = "channel_"
+	MutexMessageQueue = "message_queue"
 )
 
 // KeyedMutex provides named mutex locks for fine-grained concurrency control
