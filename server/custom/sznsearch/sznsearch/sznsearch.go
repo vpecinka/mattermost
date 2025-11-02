@@ -3,8 +3,11 @@ package sznsearch
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
+	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,8 +19,6 @@ import (
 	"github.com/mattermost/mattermost/server/v8/channels/app/platform"
 	"github.com/mattermost/mattermost/server/v8/custom/sznsearch/common"
 )
-
-const sznsearchMaxVersion = 8
 
 // SznSearchImpl implements searchengine.SearchEngineInterface for Seznam Search (ElasticSearch)
 type SznSearchImpl struct {
@@ -64,27 +65,53 @@ func (s *SznSearchImpl) IsEnabled() bool {
 
 // IsActive checks if the engine is ready and active
 func (s *SznSearchImpl) IsActive() bool {
-	return *s.Platform.Config().SznSearchSettings.EnableIndexing && atomic.LoadInt32(&s.ready) == 1
+	return atomic.LoadInt32(&s.ready) > 0
 }
 
 // IsIndexingEnabled checks if indexing is enabled
 func (s *SznSearchImpl) IsIndexingEnabled() bool {
-	return *s.Platform.Config().SznSearchSettings.EnableIndexing
+	return atomic.LoadInt32(&s.ready) > 0 && *s.Platform.Config().SznSearchSettings.EnableIndexing
 }
 
 // IsSearchEnabled checks if searching is enabled
 func (s *SznSearchImpl) IsSearchEnabled() bool {
-	return *s.Platform.Config().SznSearchSettings.EnableSearching
+	return atomic.LoadInt32(&s.ready) > 0 && *s.Platform.Config().SznSearchSettings.EnableSearching
+}
+
+// isBackendHealthy checks if ES backend is healthy (ready == 1)
+func (s *SznSearchImpl) isBackendHealthy() bool {
+	return atomic.LoadInt32(&s.ready) == 1
+}
+
+// IsIndexingSync returns true if indexing should be synchronous
+// Always returns false - indexing is always async via message queue
+func (s *SznSearchImpl) IsIndexingSync() bool {
+	return false
+}
+
+// markHealthy marks the engine as healthy (ready = 1)
+// Only transitions from unhealthy (2) to healthy (1), not from stopped (0)
+func (s *SznSearchImpl) markHealthy() {
+	current := atomic.LoadInt32(&s.ready)
+	if current == 2 {
+		atomic.StoreInt32(&s.ready, 1)
+		s.Platform.Log().Info("SznSearch: Marked as HEALTHY (ES backend recovered)")
+	}
+}
+
+// markUnhealthy marks the engine as unhealthy (ready = 2)
+// Only transitions from healthy (1) to unhealthy (2), not from stopped (0)
+func (s *SznSearchImpl) markUnhealthy() {
+	current := atomic.LoadInt32(&s.ready)
+	if current == 1 {
+		atomic.StoreInt32(&s.ready, 2)
+		s.Platform.Log().Warn("SznSearch: Marked as UNHEALTHY (ES backend unavailable)")
+	}
 }
 
 // IsAutocompletionEnabled checks if autocomplete is enabled
 func (s *SznSearchImpl) IsAutocompletionEnabled() bool {
 	return *s.Platform.Config().SznSearchSettings.EnableAutocomplete
-}
-
-// IsIndexingSync returns true if indexing should be synchronous
-func (s *SznSearchImpl) IsIndexingSync() bool {
-	return *s.Platform.Config().SznSearchSettings.LiveIndexingBatchSize <= 1
 }
 
 // GetFullVersion returns the full ElasticSearch version
@@ -100,6 +127,39 @@ func (s *SznSearchImpl) GetVersion() int {
 // GetPlugins returns the list of ElasticSearch plugins
 func (s *SznSearchImpl) GetPlugins() []string {
 	return s.plugins
+}
+
+// parseVersionFromInfo parses ES version from client.Info() response
+// Returns fullVersion string and major version int
+// Returns "0.0.0" and 0 if parsing fails
+func parseVersionFromInfo(infoBody io.Reader) (string, int) {
+	var info struct {
+		Version struct {
+			Number string `json:"number"`
+		} `json:"version"`
+	}
+
+	if err := json.NewDecoder(infoBody).Decode(&info); err != nil {
+		return "0.0.0", 0
+	}
+
+	fullVersion := info.Version.Number
+	if fullVersion == "" {
+		return "0.0.0", 0
+	}
+
+	// Parse major version (e.g., "8.10.2" -> 8)
+	parts := strings.Split(fullVersion, ".")
+	if len(parts) == 0 {
+		return fullVersion, 0
+	}
+
+	majorVersion, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return fullVersion, 0
+	}
+
+	return fullVersion, majorVersion
 }
 
 // NewSznSearchEngine creates a new SznSearch engine instance
@@ -280,63 +340,83 @@ func (s *SznSearchImpl) Start() *model.AppError {
 	s.workerState = common.WorkerStateStarting
 	s.mutex.WUnlock(common.MutexWorkerState)
 
+	// Start with unhealthy state (ready=2)
+	atomic.StoreInt32(&s.ready, 2)
+
 	s.Platform.Log().Info("SznSearch: Creating ElasticSearch client connection")
 
-	// Create ES client
+	// Create ES client - continue even if this fails
 	client, err := s.createClient()
 	if err != nil {
 		if appErr, ok := err.(*model.AppError); ok {
-			s.Platform.Log().Error("SznSearch: Failed to create client", mlog.Err(appErr))
-			return appErr
+			s.Platform.Log().Error("SznSearch: Failed to create client - will retry via health check", mlog.Err(appErr))
+		} else {
+			s.Platform.Log().Error("SznSearch: Failed to create client - will retry via health check", mlog.Err(err))
 		}
-		s.Platform.Log().Error("SznSearch: Failed to create client", mlog.Err(err))
-		return model.NewAppError("SznSearch.Start", "sznsearch.start.create_client", nil, err.Error(), http.StatusInternalServerError)
+		// Don't return error - continue with startup
+	} else {
+		s.client = client
+
+		s.Platform.Log().Info("SznSearch: Testing ElasticSearch connection")
+
+		// Test connection - don't fail startup if this fails
+		info, esErr := client.Info()
+		if esErr != nil {
+			s.Platform.Log().Error("SznSearch: Connection test failed - will retry via health check", mlog.Err(esErr))
+			// Set default version for unhealthy state
+			s.fullVersion = "0.0.0"
+			s.version = 0
+			s.plugins = []string{}
+		} else {
+			defer info.Body.Close()
+
+			if info.IsError() {
+				s.Platform.Log().Error("SznSearch: Connection error - will retry via health check",
+					mlog.Int("status_code", info.StatusCode),
+					mlog.String("response", info.String()),
+				)
+				// Set default version for unhealthy state
+				s.fullVersion = "0.0.0"
+				s.version = 0
+				s.plugins = []string{}
+			} else {
+				// Parse version from Info response
+				fullVer, majorVer := parseVersionFromInfo(info.Body)
+				s.fullVersion = fullVer
+				s.version = majorVer
+				s.plugins = []string{} // Would get from cluster state if needed
+
+				s.Platform.Log().Info("SznSearch: Connection test successful",
+					mlog.String("es_version", s.fullVersion),
+					mlog.Int("es_major_version", s.version),
+				)
+
+				s.Platform.Log().Info("SznSearch: Ensuring indices exist")
+
+				// Ensure indices exist - don't fail startup if this fails
+				if appErr := s.ensureIndices(); appErr != nil {
+					s.Platform.Log().Error("SznSearch: Failed to ensure indices - will retry via health check", mlog.Err(appErr))
+				} else {
+					s.Platform.Log().Info("SznSearch: Indices verified successfully - marking as healthy")
+					// Mark as healthy on successful initialization
+					atomic.StoreInt32(&s.ready, 1)
+				}
+			}
+		}
 	}
 
-	s.Platform.Log().Info("SznSearch: Testing ElasticSearch connection")
-
-	// Test connection
-	info, esErr := client.Info()
-	if esErr != nil {
-		s.Platform.Log().Error("SznSearch: Connection test failed", mlog.Err(esErr))
-		return model.NewAppError("SznSearch.Start", "sznsearch.start.connection_failed", nil, esErr.Error(), http.StatusInternalServerError)
-	}
-	defer info.Body.Close()
-
-	if info.IsError() {
-		s.Platform.Log().Error("SznSearch: Connection error",
-			mlog.Int("status_code", info.StatusCode),
-			mlog.String("response", info.String()),
-		)
-		return model.NewAppError("SznSearch.Start", "sznsearch.start.connection_error", nil, info.String(), http.StatusInternalServerError)
-	}
-
-	s.Platform.Log().Info("SznSearch: Connection test successful")
-
-	s.client = client
-	s.fullVersion = "8.0.0" // Would parse from info
-	s.version = 8
-	s.plugins = []string{} // Would get from cluster state
-
-	s.Platform.Log().Info("SznSearch: Ensuring indices exist")
-
-	// Ensure indices exist
-	if appErr := s.ensureIndices(); appErr != nil {
-		s.Platform.Log().Error("SznSearch: Failed to ensure indices", mlog.Err(appErr))
-		return appErr
-	}
-
-	s.Platform.Log().Info("SznSearch: Indices verified successfully")
-
-	atomic.StoreInt32(&s.ready, 1)
 	s.mutex.WLock(common.MutexWorkerState)
 	s.workerState = common.WorkerStateIdle
 	s.mutex.WUnlock(common.MutexWorkerState)
 
-	s.Platform.Log().Info("SznSearch: Engine started successfully, launching background indexer")
+	s.Platform.Log().Info("SznSearch: Engine started, launching background workers",
+		mlog.Int("ready_state", int(atomic.LoadInt32(&s.ready))))
 
 	// Start background indexer
 	go s.startIndexer()
+
+	// Start health check loop
+	go s.healthCheckLoop()
 
 	// Register slash command
 	s.RegisterCommand()
@@ -368,6 +448,83 @@ func (s *SznSearchImpl) Stop() *model.AppError {
 	s.Platform.Log().Info("SznSearch engine stopped")
 
 	return nil
+}
+
+// healthCheckLoop runs periodic health checks on the ES connection
+// and attempts to recover from failures
+func (s *SznSearchImpl) healthCheckLoop() {
+	cfg := s.Platform.Config().SznSearchSettings
+	checkInterval := time.Duration(*cfg.HealthCheckSeconds) * time.Second
+
+	s.Platform.Log().Info("SznSearch: Health check loop started",
+		mlog.Int("interval_seconds", *cfg.HealthCheckSeconds))
+
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.stopChan:
+			s.Platform.Log().Info("SznSearch: Health check loop stopped")
+			return
+		case <-ticker.C:
+			s.performHealthCheck()
+		}
+	}
+}
+
+// performHealthCheck tests ES connection and updates health state
+func (s *SznSearchImpl) performHealthCheck() {
+	if s.client == nil {
+		s.Platform.Log().Debug("SznSearch: Health check skipped - no client")
+		return
+	}
+
+	currentState := atomic.LoadInt32(&s.ready)
+
+	// Test connection with Info() - always needed for health check
+	info, err := s.client.Info()
+	if err != nil {
+		s.Platform.Log().Error("SznSearch: Health check FAILED - ES connection lost", mlog.Err(err))
+		s.markUnhealthy()
+		return
+	}
+	defer info.Body.Close()
+
+	if info.IsError() {
+		s.Platform.Log().Error("SznSearch: Health check FAILED - ES returned error",
+			mlog.Int("status_code", info.StatusCode),
+			mlog.String("response", info.String()))
+		s.markUnhealthy()
+		return
+	}
+
+	// Info() succeeded - now decide what to do based on current state
+	if currentState == 1 {
+		// Already healthy - just verify we're still good, no need to reparse version or ensure indices
+		return
+	}
+
+	// Unhealthy state (ready == 2) - perform full recovery
+	s.Platform.Log().Info("SznSearch: Attempting recovery from unhealthy state")
+
+	// Parse version from Info response during recovery
+	fullVer, majorVer := parseVersionFromInfo(info.Body)
+	s.fullVersion = fullVer
+	s.version = majorVer
+
+	// Test index operations during recovery
+	if appErr := s.ensureIndices(); appErr != nil {
+		s.Platform.Log().Error("SznSearch: Recovery FAILED - cannot ensure indices", mlog.Err(appErr))
+		return
+	}
+
+	// All checks passed - mark healthy (this will log the recovery)
+	s.Platform.Log().Info("SznSearch: Recovery SUCCESSFUL",
+		mlog.String("es_version", s.fullVersion),
+		mlog.Int("es_major_version", s.version),
+	)
+	s.markHealthy()
 }
 
 // startReindex attempts to start a reindex operation

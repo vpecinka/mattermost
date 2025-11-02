@@ -33,7 +33,6 @@ func (s *SznSearchImpl) IndexPost(post *model.Post, teamId string) *model.AppErr
 		mlog.String("post_id", post.Id),
 		mlog.String("channel_id", post.ChannelId),
 		mlog.String("user_id", post.UserId),
-		mlog.Bool("is_sync", s.IsIndexingSync()),
 	)
 
 	msg, err := s.formatPostForIndex(post)
@@ -45,17 +44,11 @@ func (s *SznSearchImpl) IndexPost(post *model.Post, teamId string) *model.AppErr
 		return err
 	}
 
-	// Add to message queue for async indexing
-	if !s.IsIndexingSync() {
-		s.mutex.WLock(common.MutexMessageQueue)
-		s.messageQueue[post.Id] = msg
-		s.mutex.WUnlock(common.MutexMessageQueue)
-		return nil
-	}
-
-	// Synchronous indexing
-	s.Platform.Log().Debug("SznSearch: Indexing post synchronously", mlog.String("post_id", post.Id))
-	return s.indexMessageBatch([]common.IndexedMessage{*msg})
+	// Add to message queue for async indexing (always async)
+	s.mutex.WLock(common.MutexMessageQueue)
+	s.messageQueue[post.Id] = msg
+	s.mutex.WUnlock(common.MutexMessageQueue)
+	return nil
 }
 
 // DeletePost removes a post from the ElasticSearch index
@@ -75,6 +68,7 @@ func (s *SznSearchImpl) DeletePost(post *model.Post) *model.AppError {
 			mlog.String("post_id", post.Id),
 			mlog.Err(err),
 		)
+		s.markUnhealthy()
 		return model.NewAppError("SznSearch.DeletePost", "sznsearch.delete_post.error", nil, err.Error(), http.StatusInternalServerError)
 	}
 	defer res.Body.Close()
@@ -85,6 +79,10 @@ func (s *SznSearchImpl) DeletePost(post *model.Post) *model.AppError {
 			mlog.Int("status_code", res.StatusCode),
 			mlog.String("response", res.String()),
 		)
+		// Mark ES as unhealthy on 5xx errors
+		if res.StatusCode >= 500 {
+			s.markUnhealthy()
+		}
 		return model.NewAppError("SznSearch.DeletePost", "sznsearch.delete_post.es_error", nil, res.String(), http.StatusInternalServerError)
 	}
 
@@ -116,12 +114,17 @@ func (s *SznSearchImpl) DeleteChannelPosts(rctx request.CTX, channelID string) *
 		&buf,
 	)
 	if err != nil {
+		s.markUnhealthy()
 		return model.NewAppError("SznSearch.DeleteChannelPosts", "sznsearch.delete_channel_posts.error", nil, err.Error(), http.StatusInternalServerError)
 	}
 	defer res.Body.Close()
 
 	if res.IsError() {
 		rctx.Logger().Warn("Failed to delete channel posts from index", mlog.String("channel_id", channelID), mlog.String("response", res.String()))
+		// Mark ES as unhealthy on 5xx errors
+		if res.StatusCode >= 500 {
+			s.markUnhealthy()
+		}
 	}
 
 	return nil
@@ -151,12 +154,17 @@ func (s *SznSearchImpl) DeleteUserPosts(rctx request.CTX, userID string) *model.
 		&buf,
 	)
 	if err != nil {
+		s.markUnhealthy()
 		return model.NewAppError("SznSearch.DeleteUserPosts", "sznsearch.delete_user_posts.error", nil, err.Error(), http.StatusInternalServerError)
 	}
 	defer res.Body.Close()
 
 	if res.IsError() {
 		rctx.Logger().Warn("Failed to delete user posts from index", mlog.String("user_id", userID), mlog.String("response", res.String()))
+		// Mark ES as unhealthy on 5xx errors
+		if res.StatusCode >= 500 {
+			s.markUnhealthy()
+		}
 	}
 
 	return nil
