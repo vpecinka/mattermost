@@ -68,13 +68,14 @@ func (s *SznSearchImpl) processMessageQueue() {
 	for _, postID := range postIDs {
 		delete(s.messageQueue, postID)
 	}
+	// Release lock BEFORE network I/O to minimize lock contention
 	s.mutex.WUnlock(common.MutexMessageQueue)
 
 	if len(batch) == 0 {
 		return
 	}
 
-	// Index batch
+	// Index batch (ES client is thread-safe, no locking needed)
 	s.Platform.Log().Debug("SznSearch: Indexing batch", mlog.Int("batch_size", len(batch)))
 	if err := s.indexMessageBatch(batch); err != nil {
 		s.Platform.Log().Error("SznSearch: Failed to index message batch",
