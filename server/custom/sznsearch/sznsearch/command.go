@@ -47,8 +47,8 @@ func (p *SznSearchCommandProvider) GetCommand(a *app.App, T i18n.TranslateFunc) 
 		Trigger:          CmdSznSearch,
 		AutoComplete:     true,
 		AutoCompleteDesc: "Manage SznSearch indexing",
-		AutoCompleteHint: "[remove-index|full-reindex|team-reindex <team_id>|channel-reindex <channel_id>]",
-		DisplayName:      "sznsearch",
+		// AutoCompleteHint: "[remove-index|full-reindex|team-reindex <team_id>|channel-reindex <channel_id>|delta-reindex <days>]",
+		DisplayName: "sznsearch",
 	}
 }
 
@@ -77,6 +77,14 @@ func (p *SznSearchCommandProvider) DoCommand(a *app.App, rctx request.CTX, args 
 			channelID = parts[1]
 		}
 		return p.handleChannelReindex(a, rctx, args, channelID)
+	case "delta-reindex":
+		if len(parts) < 2 {
+			return &model.CommandResponse{
+				Text:         "Error: Please specify number of days (e.g., `/sznsearch delta-reindex 7`)",
+				ResponseType: model.CommandResponseTypeEphemeral,
+			}
+		}
+		return p.handleDeltaReindex(a, rctx, args, parts[1])
 	default:
 		return p.showHelp()
 	}
@@ -91,6 +99,9 @@ func (p *SznSearchCommandProvider) formatReindexError(a *app.App, info *common.R
 	case common.ReindexTypeFull:
 		reindexType = "Full reindex"
 		target = "all data"
+	case common.ReindexTypeDelta:
+		reindexType = "Delta reindex"
+		target = fmt.Sprintf("posts from the last **%s days**", info.TargetID)
 	case common.ReindexTypeTeam:
 		reindexType = "Team reindex"
 		if team, err := p.engine.Platform.Store.Team().Get(info.TargetID); err == nil {
@@ -141,6 +152,7 @@ Available commands:
 - **/sznsearch full-reindex** - Reindex all posts from database (System Admin only)
 - **/sznsearch team-reindex [team_id]** - Reindex all channels in a team (System Admin or Team Admin for their team)
 - **/sznsearch channel-reindex [channel_id]** - Reindex a specific channel (Channel Admin or channel members for DMs/GMs)
+- **/sznsearch delta-reindex <days>** - Reindex posts from the last N days across all channels (System Admin only)
 
 **Note:** Omit team_id/channel_id to use the current team/channel.`
 
@@ -363,6 +375,62 @@ func (p *SznSearchCommandProvider) handleChannelReindex(a *app.App, rctx request
 
 	return &model.CommandResponse{
 		Text:         fmt.Sprintf("Reindexing channel **%s** in the background. Check server logs for progress.", channelName),
+		ResponseType: model.CommandResponseTypeEphemeral,
+	}
+}
+
+func (p *SznSearchCommandProvider) handleDeltaReindex(a *app.App, rctx request.CTX, args *model.CommandArgs, daysStr string) *model.CommandResponse {
+	// Only system admins can do delta reindex
+	if !a.HasPermissionTo(args.UserId, model.PermissionManageSystem) {
+		return &model.CommandResponse{
+			Text:         "Error: Only System Administrators can perform a delta reindex.",
+			ResponseType: model.CommandResponseTypeEphemeral,
+		}
+	}
+
+	// Parse days parameter
+	days, err := fmt.Sscanf(daysStr, "%d", new(int))
+	if err != nil || days <= 0 {
+		return &model.CommandResponse{
+			Text:         "Error: Invalid number of days. Please provide a positive integer (e.g., `/sznsearch delta-reindex 7`)",
+			ResponseType: model.CommandResponseTypeEphemeral,
+		}
+	}
+
+	var daysInt int
+	fmt.Sscanf(daysStr, "%d", &daysInt)
+
+	// Check if a reindex is already running
+	if runningInfo := p.engine.getRunningReindex(); runningInfo != nil {
+		return &model.CommandResponse{
+			Text:         p.formatReindexError(a, runningInfo),
+			ResponseType: model.CommandResponseTypeEphemeral,
+		}
+	}
+
+	rctx.Logger().Info("SznSearch: User requested delta reindex",
+		mlog.String("user_id", args.UserId),
+		mlog.Int("days", daysInt),
+	)
+
+	// Start async reindexing
+	userID := args.UserId
+	go func() {
+		ctx := request.EmptyContext(rctx.Logger())
+		if err := p.engine.DeltaReindexFromDatabase(ctx, userID, daysInt); err != nil {
+			rctx.Logger().Error("SznSearch: Delta reindex failed",
+				mlog.Int("days", daysInt),
+				mlog.Err(err),
+			)
+		} else {
+			rctx.Logger().Info("SznSearch: Delta reindex completed successfully",
+				mlog.Int("days", daysInt),
+			)
+		}
+	}()
+
+	return &model.CommandResponse{
+		Text:         fmt.Sprintf("Delta reindex started for posts from the last **%d days** in the background. Check server logs for progress.", daysInt),
 		ResponseType: model.CommandResponseTypeEphemeral,
 	}
 }
