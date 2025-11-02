@@ -3429,6 +3429,7 @@ type SznSearchSettings struct {
 	ClientKey             *string
 	IgnoreChannels        *string
 	IgnoreTeams           *string
+	ReindexChannelPool    *int
 }
 
 func (s *SznSearchSettings) SetDefaults() {
@@ -3490,6 +3491,10 @@ func (s *SznSearchSettings) SetDefaults() {
 
 	if s.IgnoreTeams == nil {
 		s.IgnoreTeams = NewPointer("")
+	}
+
+	if s.ReindexChannelPool == nil {
+		s.ReindexChannelPool = NewPointer(20)
 	}
 }
 
