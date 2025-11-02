@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/elastic/go-elasticsearch/v8/esapi"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/shared/mlog"
 	"github.com/mattermost/mattermost/server/v8/custom/sznsearch/common"
@@ -111,6 +112,13 @@ func (s *SznSearchImpl) indexMessageBatch(messages []common.IndexedMessage) *mod
 		return nil
 	}
 
+	// Check circuit breaker first
+	if !s.circuitBreaker.AllowRequest() {
+		s.Platform.Log().Warn("SznSearch: Circuit breaker open, skipping batch indexing",
+			mlog.Int("batch_size", len(messages)))
+		return model.NewAppError("SznSearch.indexMessageBatch", "sznsearch.circuit_breaker_open", nil, "Circuit breaker is open", 503)
+	}
+
 	s.Platform.Log().Debug("SznSearch: Building bulk request", mlog.Int("num_messages", len(messages)))
 
 	// Build bulk request body (newline-delimited JSON)
@@ -153,14 +161,18 @@ func (s *SznSearchImpl) indexMessageBatch(messages []common.IndexedMessage) *mod
 		}
 	}
 
-	// Execute bulk request
-	res, err := s.client.Bulk(
-		&buf,
-		s.client.Bulk.WithContext(context.Background()),
-	)
+	// Execute bulk request with retry + backoff
+	var res *esapi.Response
+	err := common.RetryWithBackoff(3, 500*time.Millisecond, 5*time.Second, s.Platform.Log(), func() error {
+		bufCopy := bytes.NewBuffer(buf.Bytes()) // Create copy for retry
+		var bulkErr error
+		res, bulkErr = s.client.Bulk(bufCopy, s.client.Bulk.WithContext(context.Background()))
+		return bulkErr
+	})
+
 	if err != nil {
-		s.Platform.Log().Error("SznSearch: Bulk request failed", mlog.Err(err))
-		s.markUnhealthy()
+		s.Platform.Log().Error("SznSearch: Bulk request failed after retries", mlog.Err(err))
+		s.circuitBreaker.RecordFailure()
 		return model.NewAppError("SznSearch.indexMessageBatch", "sznsearch.indexer.bulk_error", nil, err.Error(), 500)
 	}
 	defer res.Body.Close()
@@ -172,11 +184,13 @@ func (s *SznSearchImpl) indexMessageBatch(messages []common.IndexedMessage) *mod
 		)
 		// Mark ES as unhealthy on 5xx errors or connection issues
 		if res.StatusCode >= 500 {
-			s.markUnhealthy()
+			s.circuitBreaker.RecordFailure()
 		}
 		return model.NewAppError("SznSearch.indexMessageBatch", "sznsearch.indexer.bulk_es_error", nil, res.String(), 500)
 	}
 
+	// Success
+	s.circuitBreaker.RecordSuccess()
 	return nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/shared/mlog"
@@ -67,35 +68,46 @@ func (s *SznSearchImpl) DeletePost(post *model.Post) *model.AppError {
 		return nil
 	}
 
+	// Check circuit breaker first
+	if !s.circuitBreaker.AllowRequest() {
+		s.Platform.Log().Warn("SznSearch: Circuit breaker open, skipping delete",
+			mlog.String("post_id", post.Id))
+		return model.NewAppError("SznSearch.DeletePost", "sznsearch.circuit_breaker_open", nil, "Circuit breaker is open", http.StatusServiceUnavailable)
+	}
+
 	s.Platform.Log().Debug("SznSearch: DeletePost called",
 		mlog.String("post_id", post.Id),
 		mlog.String("channel_id", post.ChannelId),
 	)
 
-	res, err := s.client.Delete(common.MessageIndex, post.Id)
+	// Execute delete with retry + backoff
+	err := common.RetryWithBackoff(3, 500*time.Millisecond, 5*time.Second, s.Platform.Log(), func() error {
+		res, delErr := s.client.Delete(common.MessageIndex, post.Id)
+		if delErr != nil {
+			return delErr
+		}
+		defer res.Body.Close()
+
+		if res.IsError() && res.StatusCode != http.StatusNotFound {
+			if res.StatusCode >= 500 {
+				return model.NewAppError("DeletePost", "es_error", nil, res.String(), res.StatusCode)
+			}
+			// 4xx errors don't trigger retry
+			return nil
+		}
+		return nil
+	})
+
 	if err != nil {
-		s.Platform.Log().Error("SznSearch: Failed to delete post",
+		s.Platform.Log().Error("SznSearch: Failed to delete post after retries",
 			mlog.String("post_id", post.Id),
 			mlog.Err(err),
 		)
-		s.markUnhealthy()
+		s.circuitBreaker.RecordFailure()
 		return model.NewAppError("SznSearch.DeletePost", "sznsearch.delete_post.error", nil, err.Error(), http.StatusInternalServerError)
 	}
-	defer res.Body.Close()
 
-	if res.IsError() && res.StatusCode != http.StatusNotFound {
-		s.Platform.Log().Error("SznSearch: ElasticSearch error deleting post",
-			mlog.String("post_id", post.Id),
-			mlog.Int("status_code", res.StatusCode),
-			mlog.String("response", res.String()),
-		)
-		// Mark ES as unhealthy on 5xx errors
-		if res.StatusCode >= 500 {
-			s.markUnhealthy()
-		}
-		return model.NewAppError("SznSearch.DeletePost", "sznsearch.delete_post.es_error", nil, res.String(), http.StatusInternalServerError)
-	}
-
+	s.circuitBreaker.RecordSuccess()
 	s.Platform.Log().Debug("SznSearch: Post deleted successfully", mlog.String("post_id", post.Id))
 	return nil
 }
@@ -104,6 +116,12 @@ func (s *SznSearchImpl) DeletePost(post *model.Post) *model.AppError {
 func (s *SznSearchImpl) DeleteChannelPosts(rctx request.CTX, channelID string) *model.AppError {
 	if !s.IsActive() {
 		return nil // Not an error if not started
+	}
+
+	// Check circuit breaker first
+	if !s.circuitBreaker.AllowRequest() {
+		rctx.Logger().Warn("Circuit breaker open, skipping channel posts delete", mlog.String("channel_id", channelID))
+		return model.NewAppError("SznSearch.DeleteChannelPosts", "sznsearch.circuit_breaker_open", nil, "Circuit breaker is open", http.StatusServiceUnavailable)
 	}
 
 	query := map[string]any{
@@ -119,22 +137,26 @@ func (s *SznSearchImpl) DeleteChannelPosts(rctx request.CTX, channelID string) *
 		return model.NewAppError("SznSearch.DeleteChannelPosts", "sznsearch.delete_channel_posts.encode", nil, err.Error(), http.StatusInternalServerError)
 	}
 
-	res, err := s.client.DeleteByQuery(
-		[]string{common.MessageIndex},
-		&buf,
-	)
-	if err != nil {
-		s.markUnhealthy()
-		return model.NewAppError("SznSearch.DeleteChannelPosts", "sznsearch.delete_channel_posts.error", nil, err.Error(), http.StatusInternalServerError)
-	}
-	defer res.Body.Close()
-
-	if res.IsError() {
-		rctx.Logger().Warn("Failed to delete channel posts from index", mlog.String("channel_id", channelID), mlog.String("response", res.String()))
-		// Mark ES as unhealthy on 5xx errors
-		if res.StatusCode >= 500 {
-			s.markUnhealthy()
+	// Execute delete by query with retry + backoff
+	err := common.RetryWithBackoff(3, 500*time.Millisecond, 5*time.Second, rctx.Logger(), func() error {
+		bufCopy := bytes.NewBuffer(buf.Bytes())
+		res, delErr := s.client.DeleteByQuery([]string{common.MessageIndex}, bufCopy)
+		if delErr != nil {
+			return delErr
 		}
+		defer res.Body.Close()
+
+		if res.IsError() && res.StatusCode >= 500 {
+			return model.NewAppError("DeleteChannelPosts", "es_error", nil, res.String(), res.StatusCode)
+		}
+		return nil
+	})
+
+	if err != nil {
+		rctx.Logger().Warn("Failed to delete channel posts from index after retries", mlog.String("channel_id", channelID), mlog.Err(err))
+		s.circuitBreaker.RecordFailure()
+	} else {
+		s.circuitBreaker.RecordSuccess()
 	}
 
 	return nil
@@ -144,6 +166,12 @@ func (s *SznSearchImpl) DeleteChannelPosts(rctx request.CTX, channelID string) *
 func (s *SznSearchImpl) DeleteUserPosts(rctx request.CTX, userID string) *model.AppError {
 	if !s.IsActive() {
 		return nil
+	}
+
+	// Check circuit breaker first
+	if !s.circuitBreaker.AllowRequest() {
+		rctx.Logger().Warn("Circuit breaker open, skipping user posts delete", mlog.String("user_id", userID))
+		return model.NewAppError("SznSearch.DeleteUserPosts", "sznsearch.circuit_breaker_open", nil, "Circuit breaker is open", http.StatusServiceUnavailable)
 	}
 
 	query := map[string]any{
@@ -159,22 +187,26 @@ func (s *SznSearchImpl) DeleteUserPosts(rctx request.CTX, userID string) *model.
 		return model.NewAppError("SznSearch.DeleteUserPosts", "sznsearch.delete_user_posts.encode", nil, err.Error(), http.StatusInternalServerError)
 	}
 
-	res, err := s.client.DeleteByQuery(
-		[]string{common.MessageIndex},
-		&buf,
-	)
-	if err != nil {
-		s.markUnhealthy()
-		return model.NewAppError("SznSearch.DeleteUserPosts", "sznsearch.delete_user_posts.error", nil, err.Error(), http.StatusInternalServerError)
-	}
-	defer res.Body.Close()
-
-	if res.IsError() {
-		rctx.Logger().Warn("Failed to delete user posts from index", mlog.String("user_id", userID), mlog.String("response", res.String()))
-		// Mark ES as unhealthy on 5xx errors
-		if res.StatusCode >= 500 {
-			s.markUnhealthy()
+	// Execute delete by query with retry + backoff
+	err := common.RetryWithBackoff(3, 500*time.Millisecond, 5*time.Second, rctx.Logger(), func() error {
+		bufCopy := bytes.NewBuffer(buf.Bytes())
+		res, delErr := s.client.DeleteByQuery([]string{common.MessageIndex}, bufCopy)
+		if delErr != nil {
+			return delErr
 		}
+		defer res.Body.Close()
+
+		if res.IsError() && res.StatusCode >= 500 {
+			return model.NewAppError("DeleteUserPosts", "es_error", nil, res.String(), res.StatusCode)
+		}
+		return nil
+	})
+
+	if err != nil {
+		rctx.Logger().Warn("Failed to delete user posts from index after retries", mlog.String("user_id", userID), mlog.Err(err))
+		s.circuitBreaker.RecordFailure()
+	} else {
+		s.circuitBreaker.RecordSuccess()
 	}
 
 	return nil

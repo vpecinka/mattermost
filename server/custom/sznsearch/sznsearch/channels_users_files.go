@@ -109,15 +109,35 @@ func (s *SznSearchImpl) PurgeIndexes(rctx request.CTX) *model.AppError {
 		return model.NewAppError("SznSearch.PurgeIndexes", "sznsearch.not_started", nil, "", http.StatusInternalServerError)
 	}
 
-	// Delete message index
-	res, err := s.client.Indices.Delete([]string{common.MessageIndex})
+	// Delete message index with retry
+	err := common.RetryWithBackoff(3, 500*time.Millisecond, 5*time.Second, rctx.Logger(), func() error {
+		res, delErr := s.client.Indices.Delete([]string{common.MessageIndex})
+		if delErr != nil {
+			return delErr
+		}
+		defer res.Body.Close()
+
+		if res.IsError() {
+			return model.NewAppError("PurgeIndexes", "sznsearch.purge_indexes.error", nil, res.String(), res.StatusCode)
+		}
+		return nil
+	})
+
 	if err != nil {
-		return model.NewAppError("SznSearch.PurgeIndexes", "sznsearch.purge_indexes.error", nil, err.Error(), http.StatusInternalServerError)
+		if appErr, ok := err.(*model.AppError); ok {
+			return appErr
+		}
+		return model.NewAppError("SznSearch.PurgeIndexes", "sznsearch.purge_indexes.delete_error", nil, err.Error(), http.StatusInternalServerError)
 	}
-	defer res.Body.Close()
 
 	// Recreate indexes
-	return s.ensureIndices()
+	if err := s.ensureIndices(); err != nil {
+		if appErr, ok := err.(*model.AppError); ok {
+			return appErr
+		}
+		return model.NewAppError("SznSearch.PurgeIndexes", "sznsearch.purge_indexes.ensure_indices", nil, err.Error(), http.StatusInternalServerError)
+	}
+	return nil
 }
 
 // PurgeIndexList purges specific indexes

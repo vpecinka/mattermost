@@ -89,17 +89,8 @@ var messageIndexSettings = map[string]any{
 	},
 }
 
-var stateIndexSettings = map[string]any{
-	"settings": map[string]any{
-		"index": map[string]any{
-			"number_of_replicas": 2,
-			"number_of_shards":   3,
-		},
-	},
-}
-
 // ensureIndices creates ElasticSearch indices if they don't exist
-func (s *SznSearchImpl) ensureIndices() *model.AppError {
+func (s *SznSearchImpl) ensureIndices() error {
 	s.Platform.Log().Info("SznSearch: Checking if indices exist")
 
 	// Check if message index exists
@@ -126,35 +117,11 @@ func (s *SznSearchImpl) ensureIndices() *model.AppError {
 		)
 	}
 
-	// Check if state index exists
-	res, err = s.client.Indices.Exists([]string{common.StateIndex})
-	if err != nil {
-		return model.NewAppError("SznSearch.ensureIndices", "sznsearch.ensure_indices.check_error", nil, err.Error(), http.StatusInternalServerError)
-	}
-	res.Body.Close()
-
-	// Create state index if it doesn't exist
-	if res.StatusCode == http.StatusNotFound {
-		s.Platform.Log().Info("SznSearch: State index not found, creating...",
-			mlog.String("index_name", common.StateIndex),
-		)
-		if appErr := s.createIndex(common.StateIndex, stateIndexSettings); appErr != nil {
-			return appErr
-		}
-		s.Platform.Log().Info("SznSearch: State index created successfully",
-			mlog.String("index_name", common.StateIndex),
-		)
-	} else {
-		s.Platform.Log().Info("SznSearch: State index already exists",
-			mlog.String("index_name", common.StateIndex),
-		)
-	}
-
 	return nil
 }
 
 // createIndex creates an ElasticSearch index with the given settings
-func (s *SznSearchImpl) createIndex(indexName string, settings map[string]any) *model.AppError {
+func (s *SznSearchImpl) createIndex(indexName string, settings map[string]any) error {
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(settings); err != nil {
 		return model.NewAppError("SznSearch.createIndex", "sznsearch.create_index.encode", nil, err.Error(), http.StatusInternalServerError)

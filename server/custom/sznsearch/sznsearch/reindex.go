@@ -286,6 +286,7 @@ func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID strin
 
 	totalPosts := 0
 	offset := 0
+	const maxPerPage = 1000 // Mattermost API limit for GetPosts
 
 	// Unified pagination loop for both full and delta reindex
 	for {
@@ -303,8 +304,8 @@ func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID strin
 			// Full reindex: use paginated GetPosts
 			postList, err = s.Platform.Store.Post().GetPosts(model.GetPostsOptions{
 				ChannelId: channelID,
-				Page:      offset / s.batchSize,
-				PerPage:   s.batchSize,
+				Page:      offset / maxPerPage,
+				PerPage:   maxPerPage,
 			}, false, map[string]bool{})
 		}
 
@@ -353,8 +354,8 @@ func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID strin
 		}
 
 		// For full reindex, check if we need to fetch next page
-		offset += s.batchSize
-		if len(postList.Posts) < s.batchSize {
+		offset += maxPerPage
+		if len(postList.Posts) < maxPerPage {
 			break
 		}
 	}

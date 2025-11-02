@@ -3414,23 +3414,24 @@ func (s *ElasticsearchSettings) SetDefaults() {
 }
 
 type SznSearchSettings struct {
-	ConnectionURL         *string
-	Username              *string
-	Password              *string
-	EnableIndexing        *bool
-	EnableSearching       *bool
-	EnableAutocomplete    *bool
-	BatchSize             *int
-	RequestTimeoutSeconds *int
-	HealthCheckSeconds    *int
-	SkipTLSVerification   *bool
-	CA                    *string
-	ClientCert            *string
-	ClientKey             *string
-	IgnoreChannels        *string
-	IgnoreTeams           *string
-	ReindexChannelPool    *int
-	MessageQueueSize      *int
+	ConnectionURL             *string
+	Username                  *string
+	Password                  *string
+	EnableIndexing            *bool
+	EnableSearching           *bool
+	EnableAutocomplete        *bool
+	BatchSize                 *int
+	RequestTimeoutSeconds     *int
+	SkipTLSVerification       *bool
+	CA                        *string
+	ClientCert                *string
+	ClientKey                 *string
+	IgnoreChannels            *string
+	IgnoreTeams               *string
+	ReindexChannelPool        *int
+	MessageQueueSize          *int
+	CircuitBreakerMaxFailures *int
+	CircuitBreakerCooldownSec *int
 }
 
 func (s *SznSearchSettings) SetDefaults() {
@@ -3478,10 +3479,6 @@ func (s *SznSearchSettings) SetDefaults() {
 		s.RequestTimeoutSeconds = NewPointer(30)
 	}
 
-	if s.HealthCheckSeconds == nil {
-		s.HealthCheckSeconds = NewPointer(30)
-	}
-
 	if s.SkipTLSVerification == nil {
 		s.SkipTLSVerification = NewPointer(false)
 	}
@@ -3500,6 +3497,14 @@ func (s *SznSearchSettings) SetDefaults() {
 
 	if s.MessageQueueSize == nil {
 		s.MessageQueueSize = NewPointer(10000)
+	}
+
+	if s.CircuitBreakerMaxFailures == nil {
+		s.CircuitBreakerMaxFailures = NewPointer(5)
+	}
+
+	if s.CircuitBreakerCooldownSec == nil {
+		s.CircuitBreakerCooldownSec = NewPointer(30)
 	}
 }
 

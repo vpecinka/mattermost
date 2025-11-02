@@ -8,31 +8,12 @@ const (
 	// Index names and types
 	MessageIndexHunspell = "hunspell_index"
 	MessageIndexStandard = "czech_standard_index"
-	StateIndexStandard   = "simple"
 
 	MessageIndexType = MessageIndexHunspell
-	StateIndexType   = StateIndexStandard
 	MessageIndex     = "messages"
-	StateIndex       = "state"
-
-	// Indexing phases
-	IndexingPhaseFull  = "full"
-	IndexingPhaseDelta = "delta"
 
 	// Special markers
-	NoTeamID         = "@private"
-	ChannelReindex   = "#reindex-channel"
-	QueryChannelHere = "_"
-
-	// Worker states
-	WorkerStateStarting     = "starting"
-	WorkerStateStopping     = "stopping"
-	WorkerStateIdle         = "idle"
-	WorkerStateFullRequest  = "full_request"
-	WorkerStateDeltaRequest = "delta_request"
-	WorkerStateIndexing     = "indexing"
-	WorkerStateStopped      = "stopped"
-	WorkerStateError        = "error"
+	NoTeamID = "@private"
 )
 
 // Channel types (matching model.ChannelType but as int8 for ES)
@@ -62,20 +43,6 @@ type FoundIndexedMessage struct {
 	Message   IndexedMessage      `json:"_source"`
 	Score     float64             `json:"_score"`
 	Highlight map[string][]string `json:"highlight"`
-}
-
-// ChannelIndexingState tracks the indexing progress for a channel
-type ChannelIndexingState struct {
-	ChannelID         string `json:"channel_id"`
-	State             string `json:"state"` // Worker state
-	StartedAt         int64  `json:"started_at"`
-	FinishedAt        int64  `json:"finished_at"`
-	IndexedCount      int64  `json:"indexed_count"`
-	Error             string `json:"error,omitempty"`
-	IndexedMessages   int64  `json:"indexed_message"`
-	FailedMessages    int64  `json:"failed_messages"`
-	LastPostTimestamp int64  `json:"last_post_timestamp"`
-	IndexingPhase     string `json:"indexing_phase"`
 }
 
 // ChannelIndexingJob represents a channel indexing task for worker pool
