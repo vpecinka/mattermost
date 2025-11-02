@@ -113,3 +113,28 @@ func GetChannelTypeInt(channelType string) int8 {
 func (m *IndexedMessage) ToJSON() ([]byte, error) {
 	return json.Marshal(m)
 }
+
+// ReindexType represents the type of reindex operation
+type ReindexType string
+
+const (
+	ReindexTypeFull    ReindexType = "full"
+	ReindexTypeTeam    ReindexType = "team"
+	ReindexTypeChannel ReindexType = "channel"
+)
+
+// ReindexInfo tracks information about a running reindex operation
+type ReindexInfo struct {
+	Type      ReindexType `json:"type"`
+	TargetID  string      `json:"target_id"`  // TeamID or ChannelID (empty for full)
+	UserID    string      `json:"user_id"`    // User who started the reindex
+	StartedAt int64       `json:"started_at"` // Unix timestamp
+}
+
+// GetKey returns a unique key for this reindex operation
+func (r *ReindexInfo) GetKey() string {
+	if r.Type == ReindexTypeFull {
+		return "full"
+	}
+	return string(r.Type) + ":" + r.TargetID
+}
