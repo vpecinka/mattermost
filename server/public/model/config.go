@@ -3080,9 +3080,9 @@ type SznSearchSettings struct {
 	EnableIndexing        *bool
 	EnableSearching       *bool
 	EnableAutocomplete    *bool
-	LiveIndexingBatchSize *int
 	BatchSize             *int
 	RequestTimeoutSeconds *int
+	HealthCheckSeconds    *int
 	SkipTLSVerification   *bool
 	CA                    *string
 	ClientCert            *string
@@ -3129,16 +3129,16 @@ func (s *SznSearchSettings) SetDefaults() {
 		s.EnableAutocomplete = NewPointer(false)
 	}
 
-	if s.LiveIndexingBatchSize == nil {
-		s.LiveIndexingBatchSize = NewPointer(1)
-	}
-
 	if s.BatchSize == nil {
 		s.BatchSize = NewPointer(10000)
 	}
 
 	if s.RequestTimeoutSeconds == nil {
 		s.RequestTimeoutSeconds = NewPointer(30)
+	}
+
+	if s.HealthCheckSeconds == nil {
+		s.HealthCheckSeconds = NewPointer(30)
 	}
 
 	if s.SkipTLSVerification == nil {
