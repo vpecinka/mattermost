@@ -1,6 +1,7 @@
 package sznsearch
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -77,7 +78,7 @@ func (s *SznSearchImpl) ReindexChannel(rctx request.CTX, channelID, userID strin
 	}
 	defer s.stopReindex()
 
-	return s.reindexChannelInternal(rctx, channelID)
+	return s.reindexChannelInternal(rctx, channelID, 0)
 }
 
 // FullReindexFromDatabase performs a full reindex of all posts from the database
@@ -107,8 +108,8 @@ func (s *SznSearchImpl) FullReindexFromDatabase(rctx request.CTX, userID string)
 		return err
 	}
 
-	// Reindex all channels using global worker pool
-	errorCount := s.reindexChannelsParallel(rctx, cache.allList)
+	// Reindex all channels using global worker pool (sinceTime = 0 means full reindex)
+	errorCount := s.reindexChannelsParallel(rctx, cache.allList, 0)
 
 	rctx.Logger().Info("SznSearch: Full reindex completed",
 		mlog.Int("total_channels", len(cache.allList)),
@@ -118,9 +119,57 @@ func (s *SznSearchImpl) FullReindexFromDatabase(rctx request.CTX, userID string)
 	return nil
 }
 
+// DeltaReindexFromDatabase performs a delta reindex of posts created/updated within the last N days
+func (s *SznSearchImpl) DeltaReindexFromDatabase(rctx request.CTX, userID string, days int) *model.AppError {
+	if !s.IsActive() {
+		return model.NewAppError("SznSearch.DeltaReindexFromDatabase", "sznsearch.reindex.not_active", nil, "", 500)
+	}
+
+	// Try to start reindex - this will fail if another reindex is already running
+	reindexInfo := &common.ReindexInfo{
+		Type:      common.ReindexTypeDelta,
+		TargetID:  fmt.Sprintf("%d", days), // Store days as target ID for tracking
+		UserID:    userID,
+		StartedAt: time.Now().Unix(),
+	}
+
+	if err := s.startReindex(reindexInfo); err != nil {
+		return err
+	}
+	defer s.stopReindex()
+
+	rctx.Logger().Info("SznSearch: Starting delta database reindex", mlog.Int("days", days))
+
+	// Calculate timestamp (days ago in milliseconds)
+	sinceTime := model.GetMillis() - int64(days*24*60*60*1000)
+
+	// Build channels cache once (already filtered for ignored teams/channels)
+	cache, err := s.buildChannelsCache(rctx)
+	if err != nil {
+		return err
+	}
+
+	rctx.Logger().Info("SznSearch: Delta reindexing channels",
+		mlog.Int("total_channels", len(cache.allList)),
+		mlog.String("since_timestamp", fmt.Sprintf("%d", sinceTime)),
+	)
+
+	// Reindex channels with delta logic using parallel workers
+	errorCount := s.reindexChannelsParallel(rctx, cache.allList, sinceTime)
+
+	rctx.Logger().Info("SznSearch: Delta reindex completed",
+		mlog.Int("total_channels", len(cache.allList)),
+		mlog.Int("days", days),
+		mlog.Int("errors", errorCount),
+	)
+
+	return nil
+}
+
 // reindexChannelsParallel reindexes multiple channels in parallel using a worker pool
-// This is a shared function used by both full reindex and team reindex
-func (s *SznSearchImpl) reindexChannelsParallel(rctx request.CTX, channels []channelCacheItem) int {
+// This is a shared function used by both full reindex and delta reindex
+// If sinceTime is 0, performs full reindex. Otherwise, reindexes only posts since that timestamp.
+func (s *SznSearchImpl) reindexChannelsParallel(rctx request.CTX, channels []channelCacheItem, sinceTime int64) int {
 
 	channelCount := len(channels)
 	if channelCount == 0 {
@@ -128,10 +177,16 @@ func (s *SznSearchImpl) reindexChannelsParallel(rctx request.CTX, channels []cha
 		return 0
 	}
 
-	rctx.Logger().Info("SznSearch: Processing channels with worker pool",
+	logMsg := "SznSearch: Processing channels with worker pool"
+	logFields := []mlog.Field{
 		mlog.Int("channel_count", channelCount),
 		mlog.Int("pool_size", s.reindexPoolSize),
-	)
+	}
+	if sinceTime > 0 {
+		logMsg = "SznSearch: Processing delta reindex with worker pool"
+		logFields = append(logFields, mlog.String("since_time", fmt.Sprintf("%d", sinceTime)))
+	}
+	rctx.Logger().Info(logMsg, logFields...)
 
 	// Create worker pool for parallel channel reindexing
 	channelJobs := make(chan channelCacheItem, len(channels))
@@ -145,7 +200,7 @@ func (s *SznSearchImpl) reindexChannelsParallel(rctx request.CTX, channels []cha
 			defer wg.Done()
 
 			for channel := range channelJobs {
-				if err := s.reindexChannelInternal(rctx, channel.ID); err != nil {
+				if err := s.reindexChannelInternal(rctx, channel.ID, sinceTime); err != nil {
 					rctx.Logger().Error("SznSearch: Failed to reindex channel",
 						mlog.String("channel_id", channel.ID),
 						mlog.String("team_id", channel.TeamID),
@@ -197,8 +252,8 @@ func (s *SznSearchImpl) reindexTeamWithCache(rctx request.CTX, teamID string, ca
 		return nil
 	}
 
-	// Use shared parallel reindex function with pre-filtered channels
-	errorCount := s.reindexChannelsParallel(rctx, channels)
+	// Use shared parallel reindex function with pre-filtered channels (sinceTime = 0 means full reindex)
+	errorCount := s.reindexChannelsParallel(rctx, channels, 0)
 
 	if teamID == "" {
 		rctx.Logger().Info("SznSearch: Direct/group messages reindex completed",
@@ -217,24 +272,48 @@ func (s *SznSearchImpl) reindexTeamWithCache(rctx request.CTX, teamID string, ca
 }
 
 // reindexChannelInternal performs the actual channel reindex without state checking
-// This is used internally by full/team reindex operations
-func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID string) *model.AppError {
-	rctx.Logger().Debug("SznSearch: Starting channel reindex", mlog.String("channel_id", channelID))
+// This is used internally by full/team/delta reindex operations
+// If sinceTime is 0, reindexes all posts. Otherwise, reindexes only posts since that timestamp.
+func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID string, sinceTime int64) *model.AppError {
+	if sinceTime > 0 {
+		rctx.Logger().Debug("SznSearch: Starting delta channel reindex",
+			mlog.String("channel_id", channelID),
+			mlog.String("since_time", fmt.Sprintf("%d", sinceTime)),
+		)
+	} else {
+		rctx.Logger().Info("SznSearch: Reindexing channel", mlog.String("channel_id", channelID))
+	}
 
-	offset := 0
 	totalPosts := 0
+	offset := 0
 
-	rctx.Logger().Info("SznSearch: Reindexing channel", mlog.String("channel_id", channelID))
-
+	// Unified pagination loop for both full and delta reindex
 	for {
-		// Get posts in batches
-		postList, err := s.Platform.Store.Post().GetPosts(model.GetPostsOptions{
-			ChannelId: channelID,
-			Page:      offset / s.batchSize,
-			PerPage:   s.batchSize,
-		}, false, map[string]bool{})
+		var postList *model.PostList
+		var err error
+
+		// Choose method based on reindex type
+		if sinceTime > 0 {
+			// Delta reindex: use GetPostsSince (no pagination needed)
+			postList, err = s.Platform.Store.Post().GetPostsSince(model.GetPostsSinceOptions{
+				ChannelId: channelID,
+				Time:      sinceTime,
+			}, false, map[string]bool{})
+		} else {
+			// Full reindex: use paginated GetPosts
+			postList, err = s.Platform.Store.Post().GetPosts(model.GetPostsOptions{
+				ChannelId: channelID,
+				Page:      offset / s.batchSize,
+				PerPage:   s.batchSize,
+			}, false, map[string]bool{})
+		}
+
 		if err != nil {
-			return model.NewAppError("SznSearch.ReindexChannel", "sznsearch.reindex.get_posts", nil, err.Error(), 500)
+			errorCode := "sznsearch.reindex.get_posts"
+			if sinceTime > 0 {
+				errorCode = "sznsearch.reindex.get_posts_since"
+			}
+			return model.NewAppError("SznSearch.reindexChannelInternal", errorCode, nil, err.Error(), 500)
 		}
 
 		if len(postList.Posts) == 0 {
@@ -268,9 +347,13 @@ func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID strin
 			totalPosts += len(batch)
 		}
 
-		offset += s.batchSize
+		// For delta reindex, GetPostsSince returns all matching posts at once (no pagination)
+		if sinceTime > 0 {
+			break
+		}
 
-		// Break if we got less than batch size (no more posts)
+		// For full reindex, check if we need to fetch next page
+		offset += s.batchSize
 		if len(postList.Posts) < s.batchSize {
 			break
 		}
