@@ -29,9 +29,8 @@ type SznSearchImpl struct {
 	fullVersion string
 	plugins     []string
 
-	mutex        *common.KeyedMutex
-	channelMutex *common.KeyedMutex
-	stopChan     chan struct{}
+	mutex    *common.KeyedMutex
+	stopChan chan struct{}
 
 	// Indexer state
 	messageQueue     map[string]*common.IndexedMessage // postId -> IndexedMessage
@@ -43,8 +42,9 @@ type SznSearchImpl struct {
 	reindexOnStartup bool
 
 	// Reindex state tracking
-	reindexMutex   sync.RWMutex
-	runningReindex *common.ReindexInfo // nil if no reindex is running
+	reindexMutex    sync.RWMutex
+	runningReindex  *common.ReindexInfo // nil if no reindex is running
+	reindexPoolSize int                 // Number of concurrent goroutines for channel reindex
 }
 
 // UpdateConfig updates the engine configuration
@@ -135,12 +135,12 @@ func NewSznSearchEngine(ps *platform.PlatformService) *SznSearchImpl {
 		mlog.Int("ignored_teams", len(ignoreTeams)),
 		mlog.Int("batch_size", *cfg.BatchSize),
 		mlog.Int("request_timeout", *cfg.RequestTimeoutSeconds),
+		mlog.Int("reindex_pool_size", *cfg.ReindexChannelPool),
 	)
 
 	return &SznSearchImpl{
 		Platform:         ps,
 		mutex:            common.NewKeyedMutex(),
-		channelMutex:     common.NewKeyedMutex(),
 		stopChan:         make(chan struct{}),
 		messageQueue:     make(map[string]*common.IndexedMessage),
 		workerState:      common.WorkerStateStopped,
@@ -149,6 +149,7 @@ func NewSznSearchEngine(ps *platform.PlatformService) *SznSearchImpl {
 		ignoreTeams:      ignoreTeams,
 		indexerWorkers:   4,
 		reindexOnStartup: false,
+		reindexPoolSize:  *cfg.ReindexChannelPool,
 	}
 }
 
@@ -161,6 +162,20 @@ func (s *SznSearchImpl) createClient() (*elasticsearch.Client, error) {
 
 	cfg := s.Platform.Config().SznSearchSettings
 	var config elasticsearch.Config
+
+	// Calculate connection limits based on reindex pool size (used for both TLS and username/password)
+	// MaxConnsPerHost = max(10, reindexPoolSize + 10) to handle parallel reindex + live indexing
+	// MaxIdleConnsPerHost = min(10, reindexPoolSize / 2) to keep some connections warm
+	poolSize := *cfg.ReindexChannelPool
+	maxConns := 10
+	if poolSize+10 > maxConns {
+		maxConns = poolSize + 10
+	}
+	maxIdleConns := poolSize / 2
+	if maxIdleConns > 10 {
+		maxIdleConns = 10
+	}
+	timeout := time.Duration(*cfg.RequestTimeoutSeconds) * time.Second
 
 	// Check if TLS credentials are provided (client certificate authentication from config)
 	if *cfg.ClientCert != "" && *cfg.ClientKey != "" {
@@ -196,13 +211,12 @@ func (s *SznSearchImpl) createClient() (*elasticsearch.Client, error) {
 		}
 
 		// Create a custom HTTP transport with TLS and timeout
-		timeout := time.Duration(*cfg.RequestTimeoutSeconds) * time.Second
 		transport := &http.Transport{
 			TLSClientConfig:       tlsConfig,
 			ResponseHeaderTimeout: timeout,
 			DisableKeepAlives:     false,
-			MaxConnsPerHost:       10,
-			MaxIdleConnsPerHost:   10,
+			MaxConnsPerHost:       maxConns,
+			MaxIdleConnsPerHost:   maxIdleConns,
 		}
 
 		// Set up the Elasticsearch client with the custom transport
@@ -210,10 +224,6 @@ func (s *SznSearchImpl) createClient() (*elasticsearch.Client, error) {
 			Addresses: []string{*cfg.ConnectionURL},
 			Transport: transport,
 		}
-
-		s.Platform.Log().Info("SznSearch: ElasticSearch client configured",
-			mlog.Duration("request_timeout", timeout),
-		)
 	} else {
 		s.Platform.Log().Info("SznSearch: Using username/password authentication",
 			mlog.String("username", *cfg.Username),
@@ -221,12 +231,11 @@ func (s *SznSearchImpl) createClient() (*elasticsearch.Client, error) {
 		)
 
 		// Fallback to username and password authentication with timeout
-		timeout := time.Duration(*cfg.RequestTimeoutSeconds) * time.Second
 		transport := &http.Transport{
 			ResponseHeaderTimeout: timeout,
 			DisableKeepAlives:     false,
-			MaxConnsPerHost:       10,
-			MaxIdleConnsPerHost:   10,
+			MaxConnsPerHost:       maxConns,
+			MaxIdleConnsPerHost:   maxIdleConns,
 		}
 
 		config = elasticsearch.Config{
@@ -235,11 +244,13 @@ func (s *SznSearchImpl) createClient() (*elasticsearch.Client, error) {
 			Password:  *cfg.Password,
 			Transport: transport,
 		}
-
-		s.Platform.Log().Info("SznSearch: ElasticSearch client configured",
-			mlog.Duration("request_timeout", timeout),
-		)
 	}
+
+	s.Platform.Log().Info("SznSearch: ElasticSearch client configured",
+		mlog.Duration("request_timeout", timeout),
+		mlog.Int("max_conns_per_host", maxConns),
+		mlog.Int("max_idle_conns_per_host", maxIdleConns),
+	)
 
 	client, err := elasticsearch.NewClient(config)
 	if err != nil {
