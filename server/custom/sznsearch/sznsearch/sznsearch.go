@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -333,10 +334,15 @@ func (s *SznSearchImpl) Start() *model.AppError {
 	})
 
 	if err != nil {
-		s.Platform.Log().Error("SznSearch: FATAL - Failed to create client after retries, engine will not start",
-			mlog.Err(err))
-		s.circuitBreaker.RecordFailure()
-
+		s.Platform.Log().Error("SznSearch: FATAL - Failed to create client, engine will not start", mlog.Err(err))
+		// Network/timeout errors should trigger circuit breaker
+		// Note: 4xx errors are wrapped in NonRetryableError by retry wrapper
+		var appErr *model.AppError
+		if errors.As(err, &appErr) && appErr.StatusCode >= 500 {
+			s.circuitBreaker.RecordFailure()
+		} else if !errors.As(err, &appErr) {
+			s.circuitBreaker.RecordFailure()
+		}
 		return model.NewAppError("SznSearch.Start", "sznsearch.start.client_creation_failed", nil, err.Error(), http.StatusInternalServerError)
 	}
 
@@ -366,8 +372,16 @@ func (s *SznSearchImpl) Start() *model.AppError {
 	})
 
 	if testErr != nil {
-		s.Platform.Log().Warn("SznSearch: Connection test failed after retries - circuit breaker will handle recovery", mlog.Err(testErr))
-		s.circuitBreaker.RecordFailure()
+		s.Platform.Log().Warn("SznSearch: Connection test failed - circuit breaker will handle recovery", mlog.Err(testErr))
+		// Network/timeout errors should trigger circuit breaker
+		var appErr *model.AppError
+		if errors.As(testErr, &appErr) {
+			if appErr.StatusCode < 400 || appErr.StatusCode >= 500 {
+				s.circuitBreaker.RecordFailure()
+			}
+		} else {
+			s.circuitBreaker.RecordFailure()
+		}
 		s.fullVersion = "0.0.0"
 		s.version = 0
 		s.plugins = []string{}
@@ -385,8 +399,16 @@ func (s *SznSearchImpl) Start() *model.AppError {
 		})
 
 		if indicesErr != nil {
-			s.Platform.Log().Warn("SznSearch: Failed to ensure indices after retries - circuit breaker will handle recovery", mlog.Err(indicesErr))
-			s.circuitBreaker.RecordFailure()
+			s.Platform.Log().Warn("SznSearch: Failed to ensure indices - circuit breaker will handle recovery", mlog.Err(indicesErr))
+			// Network/timeout errors should trigger circuit breaker
+			var appErr *model.AppError
+			if errors.As(indicesErr, &appErr) {
+				if appErr.StatusCode < 400 || appErr.StatusCode >= 500 {
+					s.circuitBreaker.RecordFailure()
+				}
+			} else {
+				s.circuitBreaker.RecordFailure()
+			}
 		} else {
 			s.Platform.Log().Info("SznSearch: Indices verified successfully - marking circuit breaker as healthy")
 			s.circuitBreaker.RecordSuccess()

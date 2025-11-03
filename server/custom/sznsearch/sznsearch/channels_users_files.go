@@ -1,6 +1,7 @@
 package sznsearch
 
 import (
+	"errors"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -118,13 +119,24 @@ func (s *SznSearchImpl) PurgeIndexes(rctx request.CTX) *model.AppError {
 		defer res.Body.Close()
 
 		if res.IsError() {
-			return model.NewAppError("PurgeIndexes", "sznsearch.purge_indexes.error", nil, res.String(), res.StatusCode)
+			// 4xx errors are client errors - don't retry
+			if res.StatusCode >= 400 && res.StatusCode < 500 {
+				return &common.NonRetryableError{
+					Err: model.NewAppError("PurgeIndexes", "es_client_error", nil, res.String(), res.StatusCode),
+				}
+			}
+			// 5xx errors are server errors - retry
+			if res.StatusCode >= 500 {
+				return model.NewAppError("PurgeIndexes", "es_server_error", nil, res.String(), res.StatusCode)
+			}
 		}
 		return nil
 	})
 
 	if err != nil {
-		if appErr, ok := err.(*model.AppError); ok {
+		// Log but don't fail on circuit breaker for manual operations
+		var appErr *model.AppError
+		if errors.As(err, &appErr) {
 			return appErr
 		}
 		return model.NewAppError("SznSearch.PurgeIndexes", "sznsearch.purge_indexes.delete_error", nil, err.Error(), http.StatusInternalServerError)
