@@ -3132,7 +3132,7 @@ func (s *SznSearchSettings) SetDefaults() {
 	}
 
 	if s.BatchSize == nil {
-		s.BatchSize = NewPointer(10000)
+		s.BatchSize = NewPointer(100)
 	}
 
 	if s.RequestTimeoutSeconds == nil {
