@@ -3,6 +3,7 @@ package sznsearch
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -89,21 +90,33 @@ func (s *SznSearchImpl) DeletePost(post *model.Post) *model.AppError {
 		defer res.Body.Close()
 
 		if res.IsError() && res.StatusCode != http.StatusNotFound {
+			// 4xx errors are client errors - don't retry
+			if res.StatusCode >= 400 && res.StatusCode < 500 {
+				return &common.NonRetryableError{
+					Err: model.NewAppError("DeletePost", "es_client_error", nil, res.String(), res.StatusCode),
+				}
+			}
+			// 5xx errors are server errors - retry
 			if res.StatusCode >= 500 {
 				return model.NewAppError("DeletePost", "es_error", nil, res.String(), res.StatusCode)
 			}
-			// 4xx errors don't trigger retry
-			return nil
 		}
 		return nil
 	})
 
 	if err != nil {
-		s.Platform.Log().Error("SznSearch: Failed to delete post after retries",
+		s.Platform.Log().Error("SznSearch: Failed to delete post",
 			mlog.String("post_id", post.Id),
 			mlog.Err(err),
 		)
-		s.circuitBreaker.RecordFailure()
+		// Record circuit breaker failure for 5xx and network errors, not 4xx
+		// Note: 4xx errors are wrapped in NonRetryableError by retry wrapper
+		var appErr *model.AppError
+		if errors.As(err, &appErr) && appErr.StatusCode >= 500 {
+			s.circuitBreaker.RecordFailure()
+		} else if !errors.As(err, &appErr) {
+			s.circuitBreaker.RecordFailure()
+		}
 		return model.NewAppError("SznSearch.DeletePost", "sznsearch.delete_post.error", nil, err.Error(), http.StatusInternalServerError)
 	}
 
@@ -146,15 +159,31 @@ func (s *SznSearchImpl) DeleteChannelPosts(rctx request.CTX, channelID string) *
 		}
 		defer res.Body.Close()
 
-		if res.IsError() && res.StatusCode >= 500 {
-			return model.NewAppError("DeleteChannelPosts", "es_error", nil, res.String(), res.StatusCode)
+		if res.IsError() {
+			// 4xx errors are client errors - don't retry
+			if res.StatusCode >= 400 && res.StatusCode < 500 {
+				return &common.NonRetryableError{
+					Err: model.NewAppError("DeleteChannelPosts", "es_client_error", nil, res.String(), res.StatusCode),
+				}
+			}
+			// 5xx errors are server errors - retry
+			if res.StatusCode >= 500 {
+				return model.NewAppError("DeleteChannelPosts", "es_error", nil, res.String(), res.StatusCode)
+			}
 		}
 		return nil
 	})
 
 	if err != nil {
-		rctx.Logger().Warn("Failed to delete channel posts from index after retries", mlog.String("channel_id", channelID), mlog.Err(err))
-		s.circuitBreaker.RecordFailure()
+		rctx.Logger().Warn("Failed to delete channel posts from index", mlog.String("channel_id", channelID), mlog.Err(err))
+		// Record circuit breaker failure for 5xx and network errors, not 4xx
+		// Note: 4xx errors are wrapped in NonRetryableError by retry wrapper
+		var appErr *model.AppError
+		if errors.As(err, &appErr) && appErr.StatusCode >= 500 {
+			s.circuitBreaker.RecordFailure()
+		} else if !errors.As(err, &appErr) {
+			s.circuitBreaker.RecordFailure()
+		}
 	} else {
 		s.circuitBreaker.RecordSuccess()
 	}
@@ -196,15 +225,31 @@ func (s *SznSearchImpl) DeleteUserPosts(rctx request.CTX, userID string) *model.
 		}
 		defer res.Body.Close()
 
-		if res.IsError() && res.StatusCode >= 500 {
-			return model.NewAppError("DeleteUserPosts", "es_error", nil, res.String(), res.StatusCode)
+		if res.IsError() {
+			// 4xx errors are client errors - don't retry
+			if res.StatusCode >= 400 && res.StatusCode < 500 {
+				return &common.NonRetryableError{
+					Err: model.NewAppError("DeleteUserPosts", "es_client_error", nil, res.String(), res.StatusCode),
+				}
+			}
+			// 5xx errors are server errors - retry
+			if res.StatusCode >= 500 {
+				return model.NewAppError("DeleteUserPosts", "es_error", nil, res.String(), res.StatusCode)
+			}
 		}
 		return nil
 	})
 
 	if err != nil {
-		rctx.Logger().Warn("Failed to delete user posts from index after retries", mlog.String("user_id", userID), mlog.Err(err))
-		s.circuitBreaker.RecordFailure()
+		rctx.Logger().Warn("Failed to delete user posts from index", mlog.String("user_id", userID), mlog.Err(err))
+		// Record circuit breaker failure for 5xx and network errors, not 4xx
+		// Note: 4xx errors are wrapped in NonRetryableError by retry wrapper
+		var appErr *model.AppError
+		if errors.As(err, &appErr) && appErr.StatusCode >= 500 {
+			s.circuitBreaker.RecordFailure()
+		} else if !errors.As(err, &appErr) {
+			s.circuitBreaker.RecordFailure()
+		}
 	} else {
 		s.circuitBreaker.RecordSuccess()
 	}

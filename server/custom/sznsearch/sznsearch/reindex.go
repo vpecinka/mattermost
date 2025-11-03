@@ -336,6 +336,13 @@ func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID strin
 		// Prepare batch for indexing
 		batch := make([]common.IndexedMessage, 0, len(postList.Posts))
 		for _, post := range postList.Posts {
+			// Skip deleted posts (DeleteAt > 0)
+			// Note: Skipping posts here doesn't affect pagination logic - we still process
+			// all pages based on postList.Posts count from DB, not indexed count
+			if post.DeleteAt > 0 {
+				continue
+			}
+
 			msg, appErr := s.formatPostForIndex(post)
 			if appErr != nil {
 				rctx.Logger().Error("SznSearch: Failed to format post for reindex",
@@ -366,9 +373,11 @@ func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID strin
 		}
 
 		// For full reindex, check if we need to fetch next page
+		// Pagination is based on posts returned from DB (postList.Posts), not posts actually indexed
+		// This ensures we traverse all DB pages correctly even if we skip some deleted posts
 		offset += maxPerPage
 		if len(postList.Posts) < maxPerPage {
-			break
+			break // Last page - DB returned fewer posts than requested
 		}
 	}
 
