@@ -3,10 +3,10 @@
 export BUILD_NUMBER="szn-$(date +%y%m%d%H%M)"
 
 # Plugins to pre-package
-PLUGIN_PACKAGES="mattermost-plugin-jira-v4.3.0"
-PLUGIN_PACKAGES="$PLUGIN_PACKAGES mattermost-plugin-gitlab-v1.10.0"
+PLUGIN_PACKAGES="mattermost-plugin-jira-v4.4.0"
+PLUGIN_PACKAGES="$PLUGIN_PACKAGES mattermost-plugin-gitlab-v1.11.0"
 PLUGIN_PACKAGES="$PLUGIN_PACKAGES mattermost-plugin-zoom-v1.8.0"
-PLUGIN_PACKAGES="$PLUGIN_PACKAGES mattermost-plugin-boards-v9.1.6"
+PLUGIN_PACKAGES="$PLUGIN_PACKAGES mattermost-plugin-boards-v9.1.7"
 export PLUGIN_PACKAGES
 
 echo "Building BUILD_NUMBER=${BUILD_NUMBER}"
