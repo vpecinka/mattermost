@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
-	"github.com/elastic/go-elasticsearch/v8/esapi"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/shared/mlog"
 	"github.com/mattermost/mattermost/server/v8/custom/sznsearch/common"
@@ -162,31 +162,46 @@ func (s *SznSearchImpl) indexMessageBatch(messages []common.IndexedMessage) *mod
 	}
 
 	// Execute bulk request with retry + backoff
-	var res *esapi.Response
 	err := common.RetryWithBackoff(3, 500*time.Millisecond, 5*time.Second, s.Platform.Log(), func() error {
 		bufCopy := bytes.NewBuffer(buf.Bytes()) // Create copy for retry
-		var bulkErr error
-		res, bulkErr = s.client.Bulk(bufCopy, s.client.Bulk.WithContext(context.Background()))
-		return bulkErr
+		res, bulkErr := s.client.Bulk(bufCopy, s.client.Bulk.WithContext(context.Background()))
+		if bulkErr != nil {
+			return bulkErr
+		}
+		defer res.Body.Close()
+
+		// Check for HTTP errors inside retry loop
+		if res.IsError() {
+			// 4xx errors are client errors - don't retry
+			if res.StatusCode >= 400 && res.StatusCode < 500 {
+				return &common.NonRetryableError{
+					Err: model.NewAppError("indexMessageBatch", "es_client_error", nil, res.String(), res.StatusCode),
+				}
+			}
+			// 5xx errors are server errors - retry
+			if res.StatusCode >= 500 {
+				return model.NewAppError("indexMessageBatch", "es_server_error", nil, res.String(), res.StatusCode)
+			}
+		}
+
+		return nil
 	})
 
 	if err != nil {
-		s.Platform.Log().Error("SznSearch: Bulk request failed after retries", mlog.Err(err))
-		s.circuitBreaker.RecordFailure()
-		return model.NewAppError("SznSearch.indexMessageBatch", "sznsearch.indexer.bulk_error", nil, err.Error(), 500)
-	}
-	defer res.Body.Close()
-
-	if res.IsError() {
-		s.Platform.Log().Error("SznSearch: ElasticSearch bulk error",
-			mlog.Int("status_code", res.StatusCode),
-			mlog.String("response", res.String()),
-		)
-		// Mark ES as unhealthy on 5xx errors or connection issues
-		if res.StatusCode >= 500 {
+		s.Platform.Log().Error("SznSearch: Bulk request failed", mlog.Err(err))
+		// Record circuit breaker failure for:
+		// - 5xx errors (server errors)
+		// - Network errors (timeouts, connection failures)
+		// Note: 4xx errors are wrapped in NonRetryableError by retry wrapper, so they stop retry immediately
+		var appErr *model.AppError
+		if errors.As(err, &appErr) && appErr.StatusCode >= 500 {
+			// 5xx server errors trigger circuit breaker
+			s.circuitBreaker.RecordFailure()
+		} else if !errors.As(err, &appErr) {
+			// Non-AppError means network/timeout error - trigger circuit breaker
 			s.circuitBreaker.RecordFailure()
 		}
-		return model.NewAppError("SznSearch.indexMessageBatch", "sznsearch.indexer.bulk_es_error", nil, res.String(), 500)
+		return model.NewAppError("SznSearch.indexMessageBatch", "sznsearch.indexer.bulk_error", nil, err.Error(), 500)
 	}
 
 	// Success

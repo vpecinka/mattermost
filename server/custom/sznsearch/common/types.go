@@ -126,3 +126,16 @@ type SznSearchSettings struct {
 	Password              *string `json:"Password"`
 	MessageQueueSize      *int    `json:"MessageQueueSize"` // Maximum size of the message queue
 }
+
+// NonRetryableError wraps an error to indicate it should not be retried
+type NonRetryableError struct {
+	Err error
+}
+
+func (e *NonRetryableError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *NonRetryableError) Unwrap() error {
+	return e.Err
+}
