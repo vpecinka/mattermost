@@ -15,6 +15,14 @@ import {isDateLine, getDateForDateLine} from 'mattermost-redux/utils/post_list';
 
 import {getFilesDropdownPluginMenuItems} from 'selectors/plugins';
 
+// Helper function to count actual posts (excluding date separators)
+function countActualPosts(results: Array<Post|string>): number {
+    if (!results || !Array.isArray(results)) {
+        return 0;
+    }
+    return results.filter((item) => typeof item !== 'string' || !isDateLine(item)).length;
+}
+
 import Scrollbars from 'components/common/scrollbars';
 import FileSearchResultItem from 'components/file_search_results';
 import NoResultsIndicator from 'components/no_results_indicator/no_results_indicator';
@@ -352,7 +360,7 @@ const SearchResults: React.FC<Props> = (props: Props): JSX.Element => {
                     selected={searchType}
                     selectedFilter={searchFilterType}
                     isFileAttachmentsEnabled={isFileAttachmentsEnabled(config)}
-                    messagesCounter={isSearchAtEnd || props.searchPage === 0 ? `${results.length}` : `${results.length}+`}
+                    messagesCounter={isSearchAtEnd || props.searchPage === 0 ? `${countActualPosts(results)}` : `${countActualPosts(results)}+`}
                     filesCounter={isSearchFilesAtEnd || props.searchPage === 0 ? `${fileResults.length}` : `${fileResults.length}+`}
                     onChange={setSearchType}
                     onFilter={setSearchFilterType}
