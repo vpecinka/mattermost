@@ -17,7 +17,7 @@ func RetryWithBackoff(
 ) error {
 	var lastErr error
 
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := range maxAttempts {
 		lastErr = operation()
 		if lastErr == nil {
 			if attempt > 0 {
@@ -33,19 +33,11 @@ func RetryWithBackoff(
 				float64(maxDelay),
 			))
 
-			// Only log error if it's not nil
-			if lastErr != nil {
-				logger.Debug("Operation failed, retrying",
-					mlog.Int("attempt", attempt+1),
-					mlog.Duration("backoff", backoff),
-					mlog.Err(lastErr),
-				)
-			} else {
-				logger.Debug("Operation failed (nil error), retrying",
-					mlog.Int("attempt", attempt+1),
-					mlog.Duration("backoff", backoff),
-				)
-			}
+			logger.Debug("Operation failed, retrying",
+				mlog.Int("attempt", attempt+1),
+				mlog.Duration("backoff", backoff),
+				mlog.Err(lastErr),
+			)
 
 			time.Sleep(backoff)
 		}
