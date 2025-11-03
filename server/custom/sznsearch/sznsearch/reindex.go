@@ -82,7 +82,7 @@ func (s *SznSearchImpl) ReindexChannel(rctx request.CTX, channelID, userID strin
 }
 
 // FullReindexFromDatabase performs a full reindex of all posts from the database
-func (s *SznSearchImpl) FullReindexFromDatabase(rctx request.CTX, userID string) *model.AppError {
+func (s *SznSearchImpl) FullReindexFromDatabase(rctx request.CTX, userID string, shouldRecreateIndex bool) *model.AppError {
 	if !s.IsActive() {
 		return model.NewAppError("SznSearch.FullReindexFromDatabase", "sznsearch.reindex.not_active", nil, "", 500)
 	}
@@ -100,7 +100,19 @@ func (s *SznSearchImpl) FullReindexFromDatabase(rctx request.CTX, userID string)
 	}
 	defer s.stopReindex()
 
-	rctx.Logger().Info("SznSearch: Starting full database reindex")
+	rctx.Logger().Info("SznSearch: Starting full database reindex",
+		mlog.Bool("recreate_index", shouldRecreateIndex),
+	)
+
+	// Optionally purge and recreate indices if requested
+	if shouldRecreateIndex {
+		rctx.Logger().Info("SznSearch: Purging and recreating indices")
+		if err := s.PurgeIndexes(rctx); err != nil {
+			rctx.Logger().Error("SznSearch: Failed to purge indices", mlog.Err(err))
+			return err
+		}
+		rctx.Logger().Info("SznSearch: Indices recreated successfully")
+	}
 
 	// Build channels cache once for all teams (already filtered for ignored teams/channels)
 	cache, err := s.buildChannelsCache(rctx)

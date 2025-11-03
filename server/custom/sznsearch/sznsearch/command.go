@@ -64,7 +64,8 @@ func (p *SznSearchCommandProvider) DoCommand(a *app.App, rctx request.CTX, args 
 	case "remove-index":
 		return p.handleRemoveIndex(a, rctx, args)
 	case "full-reindex":
-		return p.handleFullReindex(a, rctx, args)
+		shouldRecreate := len(parts) > 1 && parts[1] == "recreate"
+		return p.handleFullReindex(a, rctx, args, shouldRecreate)
 	case "team-reindex":
 		teamID := args.TeamId // Default to current team
 		if len(parts) > 1 {
@@ -149,7 +150,7 @@ func (p *SznSearchCommandProvider) showHelp() *model.CommandResponse {
 
 Available commands:
 - **/sznsearch remove-index** - Remove and recreate the search index (System Admin only)
-- **/sznsearch full-reindex** - Reindex all posts from database (System Admin only)
+- **/sznsearch full-reindex [recreate]** - Reindex all posts from database. Add 'recreate' to delete and recreate the index first (System Admin only)
 - **/sznsearch team-reindex [team_id]** - Reindex all channels in a team (System Admin or Team Admin for their team)
 - **/sznsearch channel-reindex [channel_id]** - Reindex a specific channel (Channel Admin or channel members for DMs/GMs)
 - **/sznsearch delta-reindex <days>** - Reindex posts from the last N days across all channels (System Admin only)
@@ -190,7 +191,7 @@ func (p *SznSearchCommandProvider) handleRemoveIndex(a *app.App, rctx request.CT
 	}
 }
 
-func (p *SznSearchCommandProvider) handleFullReindex(a *app.App, rctx request.CTX, args *model.CommandArgs) *model.CommandResponse {
+func (p *SznSearchCommandProvider) handleFullReindex(a *app.App, rctx request.CTX, args *model.CommandArgs, shouldRecreate bool) *model.CommandResponse {
 	// Only system admins can do full reindex
 	if !a.HasPermissionTo(args.UserId, model.PermissionManageSystem) {
 		return &model.CommandResponse{
@@ -209,21 +210,27 @@ func (p *SznSearchCommandProvider) handleFullReindex(a *app.App, rctx request.CT
 
 	rctx.Logger().Info("SznSearch: User requested full reindex",
 		mlog.String("user_id", args.UserId),
+		mlog.Bool("recreate_index", shouldRecreate),
 	)
 
 	// Start async reindexing
 	userID := args.UserId
 	go func() {
 		ctx := request.EmptyContext(rctx.Logger())
-		if err := p.engine.FullReindexFromDatabase(ctx, userID); err != nil {
+		if err := p.engine.FullReindexFromDatabase(ctx, userID, shouldRecreate); err != nil {
 			rctx.Logger().Error("SznSearch: Full reindex failed", mlog.Err(err))
 		} else {
 			rctx.Logger().Info("SznSearch: Full reindex completed successfully")
 		}
 	}()
 
+	responseText := "Full reindex started in the background. Check server logs for progress."
+	if shouldRecreate {
+		responseText = "Full reindex with index recreation started in the background. The index will be deleted and recreated. Check server logs for progress."
+	}
+
 	return &model.CommandResponse{
-		Text:         "Full reindex started in the background. Check server logs for progress.",
+		Text:         responseText,
 		ResponseType: model.CommandResponseTypeEphemeral,
 	}
 }
