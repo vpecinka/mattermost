@@ -3,6 +3,7 @@ package sznsearch
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -85,11 +86,17 @@ func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*
 		defer res.Body.Close()
 
 		if res.IsError() {
+			// 4xx errors are client errors - don't retry, return immediately
+			if res.StatusCode >= 400 && res.StatusCode < 500 {
+				// Use a special error type that stops retry
+				err := model.NewAppError("SearchPosts", "es_client_error", nil, res.String(), res.StatusCode)
+				// Mark as non-retryable by wrapping in a way that RetryWithBackoff won't retry
+				return &common.NonRetryableError{Err: err}
+			}
+			// 5xx errors are server errors - retry
 			if res.StatusCode >= 500 {
 				return model.NewAppError("SearchPosts", "es_error", nil, res.String(), res.StatusCode)
 			}
-			// 4xx errors don't trigger retry
-			return model.NewAppError("SearchPosts", "es_client_error", nil, res.String(), res.StatusCode)
 		}
 
 		// Parse response
@@ -100,8 +107,19 @@ func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*
 	})
 
 	if err != nil {
-		s.Platform.Log().Error("SznSearch: Search request failed after retries", mlog.Err(err))
-		s.circuitBreaker.RecordFailure()
+		s.Platform.Log().Error("SznSearch: Search request failed", mlog.Err(err))
+		// Record circuit breaker failure for:
+		// - 5xx errors (server errors)
+		// - Network errors (timeouts, connection failures)
+		// Note: 4xx errors are wrapped in NonRetryableError by retry wrapper, so they stop retry immediately
+		var appErr *model.AppError
+		if errors.As(err, &appErr) && appErr.StatusCode >= 500 {
+			// 5xx server errors trigger circuit breaker
+			s.circuitBreaker.RecordFailure()
+		} else if !errors.As(err, &appErr) {
+			// Non-AppError means network/timeout error - trigger circuit breaker
+			s.circuitBreaker.RecordFailure()
+		}
 		return nil, nil, model.NewAppError("SznSearch.SearchPosts", "sznsearch.search_posts.error", nil, err.Error(), http.StatusInternalServerError)
 	}
 

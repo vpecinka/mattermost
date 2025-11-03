@@ -1,6 +1,7 @@
 package common
 
 import (
+	"errors"
 	"math"
 	"time"
 
@@ -24,6 +25,16 @@ func RetryWithBackoff(
 				logger.Debug("Operation succeeded after retry", mlog.Int("attempt", attempt+1))
 			}
 			return nil
+		}
+
+		// Check if error is non-retryable
+		var nonRetryable *NonRetryableError
+		if errors.As(lastErr, &nonRetryable) {
+			logger.Debug("Non-retryable error encountered, stopping retries",
+				mlog.Int("attempt", attempt+1),
+				mlog.Err(lastErr),
+			)
+			return nonRetryable.Unwrap()
 		}
 
 		if attempt < maxAttempts-1 {
