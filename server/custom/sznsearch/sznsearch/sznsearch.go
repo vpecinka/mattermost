@@ -469,7 +469,7 @@ func (s *SznSearchImpl) startReindex(info *common.ReindexInfo) *model.AppError {
 	}
 
 	s.runningReindex = info
-	s.Platform.Log().Info("SznSearch: Reindex started",
+	s.Platform.Log().Debug("SznSearch: Reindex started",
 		mlog.String("type", string(info.Type)),
 		mlog.String("target_id", info.TargetID),
 		mlog.String("user_id", info.UserID),
@@ -484,7 +484,7 @@ func (s *SznSearchImpl) stopReindex() {
 	defer s.reindexMutex.Unlock()
 
 	if s.runningReindex != nil {
-		s.Platform.Log().Info("SznSearch: Reindex completed",
+		s.Platform.Log().Debug("SznSearch: Reindex completed",
 			mlog.String("type", string(s.runningReindex.Type)),
 			mlog.String("target_id", s.runningReindex.TargetID),
 		)
