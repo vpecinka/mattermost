@@ -145,7 +145,7 @@ func parseVersionFromInfo(infoBody io.Reader) (string, int) {
 
 // NewSznSearchEngine creates a new SznSearch engine instance
 func NewSznSearchEngine(ps *platform.PlatformService) *SznSearchImpl {
-	ps.Log().Info("SznSearch: Creating new engine instance")
+	ps.Log().Debug("SznSearch: Creating new engine instance")
 
 	cfg := ps.Config().SznSearchSettings
 
@@ -171,7 +171,7 @@ func NewSznSearchEngine(ps *platform.PlatformService) *SznSearchImpl {
 		}
 	}
 
-	ps.Log().Info("SznSearch: Configuration loaded",
+	ps.Log().Debug("SznSearch: Configuration loaded",
 		mlog.Int("ignored_channels", len(ignoreChannels)),
 		mlog.Int("ignored_teams", len(ignoreTeams)),
 		mlog.Int("batch_size", *cfg.BatchSize),
@@ -202,7 +202,7 @@ func NewSznSearchEngine(ps *platform.PlatformService) *SznSearchImpl {
 
 // createClient creates a new ElasticSearch client with proper TLS configuration
 func (s *SznSearchImpl) createClient() (*elasticsearch.Client, error) {
-	s.Platform.Log().Info("SznSearch: Creating ElasticSearch client")
+	s.Platform.Log().Debug("SznSearch: Creating ElasticSearch client")
 
 	cfg := s.Platform.Config().SznSearchSettings
 	var config elasticsearch.Config
@@ -223,7 +223,7 @@ func (s *SznSearchImpl) createClient() (*elasticsearch.Client, error) {
 
 	// Check if TLS credentials are provided (client certificate authentication from config)
 	if *cfg.ClientCert != "" && *cfg.ClientKey != "" {
-		s.Platform.Log().Info("SznSearch: Using TLS client certificate authentication",
+		s.Platform.Log().Debug("SznSearch: Using TLS client certificate authentication",
 			mlog.String("client_cert", *cfg.ClientCert),
 			mlog.String("connection_url", *cfg.ConnectionURL),
 		)
@@ -307,7 +307,7 @@ func (s *SznSearchImpl) createClient() (*elasticsearch.Client, error) {
 
 // Start initializes and starts the SznSearch engine
 func (s *SznSearchImpl) Start() *model.AppError {
-	s.Platform.Log().Info("SznSearch: Starting engine initialization")
+	s.Platform.Log().Debug("SznSearch: Starting engine initialization")
 
 	// Check if indexing is enabled in config (no license required for custom implementation)
 	if !*s.Platform.Config().SznSearchSettings.EnableIndexing {
@@ -321,7 +321,7 @@ func (s *SznSearchImpl) Start() *model.AppError {
 	}
 
 	// Keep ready=0 until client is successfully created
-	s.Platform.Log().Info("SznSearch: Creating ElasticSearch client connection")
+	s.Platform.Log().Debug("SznSearch: Creating ElasticSearch client connection")
 
 	// Create ES client with retry - CRITICAL: must succeed to set ready=1
 	err := common.RetryWithBackoff(3, 500*time.Millisecond, 5*time.Second, s.Platform.Log(), func() error {
@@ -351,7 +351,7 @@ func (s *SznSearchImpl) Start() *model.AppError {
 	s.Platform.Log().Info("SznSearch: Client created successfully, engine is now READY")
 
 	// Test connection with retry (non-fatal if it fails)
-	s.Platform.Log().Info("SznSearch: Testing ElasticSearch connection")
+	s.Platform.Log().Debug("SznSearch: Testing ElasticSearch connection")
 	testErr := common.RetryWithBackoff(3, 500*time.Millisecond, 5*time.Second, s.Platform.Log(), func() error {
 		info, esErr := s.client.Info()
 		if esErr != nil {
@@ -391,7 +391,7 @@ func (s *SznSearchImpl) Start() *model.AppError {
 			mlog.Int("es_major_version", s.version),
 		)
 
-		s.Platform.Log().Info("SznSearch: Ensuring indices exist")
+		s.Platform.Log().Debug("SznSearch: Ensuring indices exist")
 
 		// Ensure indices exist with retry (non-fatal if it fails)
 		indicesErr := common.RetryWithBackoff(3, 500*time.Millisecond, 5*time.Second, s.Platform.Log(), func() error {
