@@ -40,21 +40,6 @@ git commit -m "feat: description of change"
 git push origin szn-build --force-with-lease
 ```
 
-### Regular upstream sync (weekly/monthly)
-```bash
-# Switch to development branch
-git checkout szn-build
-
-# Fetch latest upstream changes
-git fetch upstream
-
-# Rebase your changes on top of upstream
-git rebase upstream/master
-
-# Force push (safely) to your fork
-git push origin szn-build --force-with-lease
-```
-
 **Note**: Use `--force-with-lease` instead of `--force` to prevent accidentally overwriting work if someone else pushed to the branch.
 
 ---
