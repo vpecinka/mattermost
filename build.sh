@@ -17,15 +17,15 @@ read
 echo "\n===== BUILDING WEBAPP ================\n"
 cd webapp
 . ~/.nvm/nvm.sh
-make dist
+make dist || exit 1
 
 echo "\n===== BUILDING SERVER ================\n"
 cd ../server
-make build-linux-amd64 
+make build-linux-amd64  || exit 1
 
 
 echo "\n===== MAKING APP PACKAGE =============\n"
-make package-linux-amd64
+make package-linux-amd64 || exit 1
 
 cd ..
 
