@@ -11,11 +11,11 @@
   - Regular rebase to keep up-to-date with upstream
   - Source for production builds
 
-### `szn-prod-vX.Y.Z` (production release branches)
+### `szn-build-vX.Y.Z` (production release branches)
 - **Purpose**: Branches for specific production releases
 - **Based on**: Specific upstream tags (e.g., `v11.1.0`, `v11.2.0`)
 - **Usage**: Cherry-pick all changes from `szn-build` for production deployment
-- **Example**: `szn-prod-v11.1.0`, `szn-prod-v11.2.0`
+- **Example**: `szn-build-v11.1.0`, `szn-build-v11.2.0`
 
 ---
 
@@ -43,22 +43,6 @@ git push origin szn-build --force-with-lease
 
 **Note**: Use `--force-with-lease` instead of `--force` to prevent accidentally overwriting work if someone else pushed to the branch.
 
-### Regular upstream sync (weekly/monthly recommended)
-
-```bash
-# Switch to development branch
-git checkout szn-build
-
-# Fetch latest changes from both remotes
-git fetch origin       # Your fork
-git fetch upstream     # Official Mattermost repo
-
-# Rebase against upstream/master (NOT origin/master)
-git rebase upstream/master
-
-# Force push to your fork
-git push origin szn-build --force-with-lease
-```
 
 **Important**: 
 - Your local `szn-build` tracks `origin/szn-build` (for easy `git pull` and `git push`)
@@ -81,13 +65,13 @@ git rebase upstream/master
 git push origin szn-build --force-with-lease
 
 # 2. Create production branch from the release tag
-git checkout -b szn-prod-v11.2.0 v11.2.0
+git checkout -b szn-build-v11.2.0 v11.2.0
 
 # 3. Cherry-pick ALL your custom changes at once
 git cherry-pick upstream/master..szn-build
 
 # 4. Push production branch
-git push origin szn-prod-v11.2.0
+git push origin szn-build-v11.2.0
 ```
 
 ### If cherry-pick conflicts occur
@@ -185,7 +169,7 @@ git branch --set-upstream-to=origin/szn-build szn-build
 - Test production branches before deploying
 
 ### ❌ DON'T:
-- Don't commit directly to production branches (`szn-prod-*`)
+- Don't commit directly to production branches (`szn-build-*`)
 - Don't rebase production branches after creation
 - Don't use `--force` for pushing (use `--force-with-lease`)
 - Don't merge upstream into `szn-build` (always rebase)
@@ -268,9 +252,9 @@ git push origin szn-build --force-with-lease
 git fetch upstream --tags
 git checkout szn-build
 git rebase upstream/master
-git checkout -b szn-prod-v11.3.0 v11.3.0
+git checkout -b szn-build-v11.3.0 v11.3.0
 git cherry-pick upstream/master..szn-build
-git push origin szn-prod-v11.3.0
+git push origin szn-build-v11.3.0
 ```
 
 ---
@@ -278,6 +262,6 @@ git push origin szn-prod-v11.3.0
 ## Summary
 
 1. **Development**: Always work in `szn-build`, rebase regularly on `upstream/master`
-2. **Production**: Create `szn-prod-vX.Y.Z` from tags, cherry-pick all changes from `szn-build`
+2. **Production**: Create `szn-build-vX.Y.Z` from tags, cherry-pick all changes from `szn-build`
 3. **Pushing**: Always use `--force-with-lease` when force pushing
 4. **Syncing**: Fetch and rebase frequently to minimize conflicts
