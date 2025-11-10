@@ -4,7 +4,8 @@
 
 ### `szn-build` (main development branch)
 - **Purpose**: Active development branch for custom changes
-- **Based on**: `upstream/master` (always tracking the latest upstream main branch)
+- **Based on**: `upstream/master` (rebased regularly)
+- **Tracks**: `origin/szn-build` (your fork)
 - **Usage**: 
   - All new custom changes are committed here
   - Regular rebase to keep up-to-date with upstream
@@ -41,6 +42,28 @@ git push origin szn-build --force-with-lease
 ```
 
 **Note**: Use `--force-with-lease` instead of `--force` to prevent accidentally overwriting work if someone else pushed to the branch.
+
+### Regular upstream sync (weekly/monthly recommended)
+
+```bash
+# Switch to development branch
+git checkout szn-build
+
+# Fetch latest changes from both remotes
+git fetch origin       # Your fork
+git fetch upstream     # Official Mattermost repo
+
+# Rebase against upstream/master (NOT origin/master)
+git rebase upstream/master
+
+# Force push to your fork
+git push origin szn-build --force-with-lease
+```
+
+**Important**: 
+- Your local `szn-build` tracks `origin/szn-build` (for easy `git pull` and `git push`)
+- But you **rebase against `upstream/master`** to get official updates
+- This keeps your fork in sync while maintaining clean history
 
 ---
 
@@ -128,6 +151,28 @@ git reflog show szn-build
 # Reset to commit before rebase (example: szn-build@{1})
 git reset --hard szn-build@{1}
 ```
+
+---
+
+## Branch Tracking Setup
+
+Your branches should track your fork (`origin`), not upstream:
+
+```bash
+# Check current tracking
+git branch -vv
+
+# Set master to track origin/master (if not already)
+git branch --set-upstream-to=origin/master master
+
+# Set szn-build to track origin/szn-build (if not already)
+git branch --set-upstream-to=origin/szn-build szn-build
+```
+
+**Why this setup?**
+- `git pull` and `git push` work naturally with your fork
+- You explicitly rebase against `upstream/master` when you want updates
+- Clear separation between your fork and upstream repo
 
 ---
 
