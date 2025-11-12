@@ -68,8 +68,8 @@ gpg --detach-sign --armor --output your-plugin.tar.gz.sig your-plugin.tar.gz
 ### Step 3: Export Public Key
 
 ```bash
-# Export your public key (ASCII armored format)
-gpg --export --armor your-email@example.com > my-plugin-public-key.pub
+# Export your public key
+gpg --export your-email@example.com > my-plugin-public-key.pub
 ```
 
 Replace `your-email@example.com` with the email you used when generating the GPG key.
