@@ -459,10 +459,17 @@ func (s *SznSearchImpl) buildChannelsCache(rctx request.CTX) (*channelsCache, *m
 	dmChannels := 0
 	seenChannels := make(map[string]bool)
 	for _, user := range users {
+		// skip bot users
+		if user.IsBot {
+			rctx.Logger().Debug("SznSearch: Skipping bot user for DM/GM channels", mlog.String("user_id", user.Id), mlog.String("username", user.Username))
+			continue
+		}
 		// Get DM/GM channels for this user
 		userChannels, err := s.Platform.Store.Channel().GetChannelsByUser(user.Id, false, 0, -1, "")
 		if err != nil {
-			return nil, model.NewAppError("SznSearch.buildChannelsCache", "sznsearch.reindex.get_user_channels", nil, err.Error(), 500)
+			// log this error and continue with other users
+			rctx.Logger().Warn("SznSearch: Failed to get user channels", mlog.String("user_id", user.Id), mlog.Err(err))
+			continue
 		}
 
 		for _, channel := range userChannels {
