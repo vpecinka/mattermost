@@ -1,6 +1,6 @@
 #!/bin/zsh
 
-export BUILD_NUMBER="szn-$(date +%y%m%d%H%M)"
+export BUILD_NUMBER="szn-$(date +%y%m%d-%H%M)"
 
 # Plugins to pre-package
 PLUGIN_PACKAGES="mattermost-plugin-jira-v4.4.0"
@@ -11,8 +11,6 @@ export PLUGIN_PACKAGES
 
 echo "Building BUILD_NUMBER=${BUILD_NUMBER}"
 echo "Plugins: ${PLUGIN_PACKAGES}"
-echo "Any key to continue, CTRL+C to break..."
-read
 
 echo "\n===== BUILDING WEBAPP ================\n"
 cd webapp
