@@ -450,6 +450,45 @@ func (s *SznSearchImpl) buildChannelsCache(rctx request.CTX) (*channelsCache, *m
 		}
 	}
 
+	// 2. Load DM/GM channels separately using GetAll() with empty teamID
+	// This is a workaround - we'll use GetAll() for a dummy team to access the underlying SQL method
+	allChannelsForTeam, err := s.Platform.Store.Channel().GetAll("")
+	if err != nil {
+		rctx.Logger().Warn("SznSearch: Failed to get DM/GM channels", mlog.Err(err))
+	} else {
+		dmChannels := 0
+		for _, channel := range allChannelsForTeam {
+			// Filter for DM/GM channels only
+			if channel.Type != model.ChannelTypeDirect && channel.Type != model.ChannelTypeGroup {
+				continue
+			}
+
+			if channel.DeleteAt > 0 {
+				continue // Skip deleted channels
+			}
+
+			if s.ignoreChannels[channel.Id] {
+				skippedChannels++
+				continue
+			}
+
+			item := channelCacheItem{
+				ID:     channel.Id,
+				TeamID: "", // DM/GM always have empty TeamID
+				Type:   channel.Type,
+			}
+
+			cache.byTeam[""] = append(cache.byTeam[""], item)
+			cache.allList = append(cache.allList, item)
+			totalChannels++
+			dmChannels++
+		}
+
+		rctx.Logger().Debug("SznSearch: DM/GM channels loaded",
+			mlog.Int("dm_gm_count", dmChannels),
+		)
+	}
+
 	rctx.Logger().Debug("SznSearch: Channels cache built",
 		mlog.Int("total_channels", totalChannels),
 		mlog.Int("skipped_channels", skippedChannels),
