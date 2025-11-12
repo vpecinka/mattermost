@@ -502,7 +502,7 @@ func (s *SznSearchImpl) buildChannelsCache(rctx request.CTX) (*channelsCache, *m
 		}
 	}
 
-	rctx.Logger().Debug("SznSearch: Channels cache built",
+	rctx.Logger().Info("SznSearch: Channels cache built",
 		mlog.Int("total_channels", totalChannels),
 		mlog.Int("skipped_channels", skippedChannels),
 		mlog.Int("dm_channels", dmChannels),
