@@ -243,26 +243,6 @@ func (p *SznSearchCommandProvider) handleTeamReindex(a *app.App, rctx request.CT
 		}
 	}
 
-	// Check permissions: System admin can reindex any team, Team admin can reindex their own team
-	isSystemAdmin := a.HasPermissionTo(args.UserId, model.PermissionManageSystem)
-	isTeamAdmin := a.HasPermissionToTeam(rctx, args.UserId, teamID, model.PermissionManageTeam)
-
-	if !isSystemAdmin && !isTeamAdmin {
-		return &model.CommandResponse{
-			Text:         "Error: You must be a System Administrator or Team Administrator to reindex a team.",
-			ResponseType: model.CommandResponseTypeEphemeral,
-		}
-	}
-
-	// Get team to verify it exists and for logging
-	team, err := p.engine.Platform.Store.Team().Get(teamID)
-	if err != nil {
-		return &model.CommandResponse{
-			Text:         fmt.Sprintf("Error: Team not found: %s", err.Error()),
-			ResponseType: model.CommandResponseTypeEphemeral,
-		}
-	}
-
 	// Check if a reindex is already running
 	if runningInfo := p.engine.getRunningReindex(); runningInfo != nil {
 		return &model.CommandResponse{
@@ -271,10 +251,37 @@ func (p *SznSearchCommandProvider) handleTeamReindex(a *app.App, rctx request.CT
 		}
 	}
 
+	// Check permissions: System admin can reindex any team, Team admin can reindex their own team
+	isSystemAdmin := a.HasPermissionTo(args.UserId, model.PermissionManageSystem)
+	isTeamAdmin := (teamID != "@") && a.HasPermissionToTeam(rctx, args.UserId, teamID, model.PermissionManageTeam)
+
+	if !isSystemAdmin && !isTeamAdmin {
+		return &model.CommandResponse{
+			Text:         "Error: You must be a System Administrator or Team Administrator to reindex a team.",
+			ResponseType: model.CommandResponseTypeEphemeral,
+		}
+	}
+
+	var teamDisplayName string
+	if teamID == "@" {
+		teamDisplayName = "private messages"
+		teamID = "" // Use empty teamID to indicate private messages
+	} else {
+		// Get team to verify it exists and for logging
+		team, err := p.engine.Platform.Store.Team().Get(teamID)
+		if err != nil {
+			return &model.CommandResponse{
+				Text:         fmt.Sprintf("Error: Team not found: %s", err.Error()),
+				ResponseType: model.CommandResponseTypeEphemeral,
+			}
+		}
+		teamDisplayName = team.DisplayName
+	}
+
 	rctx.Logger().Info("SznSearch: User requested team reindex",
 		mlog.String("user_id", args.UserId),
 		mlog.String("team_id", teamID),
-		mlog.String("team_name", team.Name),
+		mlog.String("team_name", teamDisplayName),
 	)
 
 	// Start async reindexing
@@ -294,7 +301,7 @@ func (p *SznSearchCommandProvider) handleTeamReindex(a *app.App, rctx request.CT
 	}()
 
 	return &model.CommandResponse{
-		Text:         fmt.Sprintf("Reindexing team **%s** in the background. Check server logs for progress.", team.DisplayName),
+		Text:         fmt.Sprintf("Reindexing team **%s** in the background. Check server logs for progress.", teamDisplayName),
 		ResponseType: model.CommandResponseTypeEphemeral,
 	}
 }
