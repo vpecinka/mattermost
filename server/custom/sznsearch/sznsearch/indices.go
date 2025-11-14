@@ -89,31 +89,116 @@ var messageIndexSettings = map[string]any{
 	},
 }
 
+// Index settings for user autocomplete
+var userIndexSettings = map[string]any{
+	"settings": map[string]any{
+		"index": map[string]any{
+			"number_of_replicas": 2,
+			"number_of_shards":   3,
+		},
+	},
+	"mappings": map[string]any{
+		"properties": map[string]any{
+			"suggestions_with_fullname": map[string]any{
+				"type": "keyword",
+			},
+			"suggestions_without_fullname": map[string]any{
+				"type": "keyword",
+			},
+			"team_id": map[string]any{
+				"type": "keyword",
+			},
+			"channel_id": map[string]any{
+				"type": "keyword",
+			},
+			"delete_at": map[string]any{
+				"type": "long",
+			},
+			"roles": map[string]any{
+				"type": "keyword",
+			},
+		},
+	},
+}
+
+// Index settings for channel autocomplete
+var channelIndexSettings = map[string]any{
+	"settings": map[string]any{
+		"index": map[string]any{
+			"number_of_replicas": 2,
+			"number_of_shards":   3,
+		},
+	},
+	"mappings": map[string]any{
+		"properties": map[string]any{
+			"name_suggestions": map[string]any{
+				"type": "keyword",
+			},
+			"team_id": map[string]any{
+				"type": "keyword",
+			},
+			"user_ids": map[string]any{
+				"type": "keyword",
+			},
+			"team_member_ids": map[string]any{
+				"type": "keyword",
+			},
+			"type": map[string]any{
+				"type": "keyword",
+			},
+			"delete_at": map[string]any{
+				"type": "long",
+			},
+		},
+	},
+}
+
+// indexDefinition holds index name and its settings
+type indexDefinition struct {
+	name     string
+	settings map[string]any
+}
+
 // ensureIndices creates ElasticSearch indices if they don't exist
 func (s *SznSearchImpl) ensureIndices() error {
 	s.Platform.Log().Info("SznSearch: Checking if indices exist")
 
-	// Check if message index exists
-	res, err := s.client.Indices.Exists([]string{common.MessageIndex})
+	indices := []indexDefinition{
+		{name: common.MessageIndex, settings: messageIndexSettings},
+		{name: common.UserIndex, settings: userIndexSettings},
+		{name: common.ChannelIndex, settings: channelIndexSettings},
+	}
+
+	for _, idx := range indices {
+		if err := s.ensureIndex(idx.name, idx.settings); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// ensureIndex checks if an index exists and creates it if needed
+func (s *SznSearchImpl) ensureIndex(indexName string, settings map[string]any) error {
+	res, err := s.client.Indices.Exists([]string{indexName})
 	if err != nil {
-		return model.NewAppError("SznSearch.ensureIndices", "sznsearch.ensure_indices.check_error", nil, err.Error(), http.StatusInternalServerError)
+		return model.NewAppError("SznSearch.ensureIndex", "sznsearch.ensure_index.check_error", nil, err.Error(), http.StatusInternalServerError)
 	}
 	res.Body.Close()
 
-	// Create message index if it doesn't exist
 	if res.StatusCode == http.StatusNotFound {
-		s.Platform.Log().Info("SznSearch: Message index not found, creating...",
-			mlog.String("index_name", common.MessageIndex),
+		s.Platform.Log().Info("SznSearch: Index not found, creating...",
+			mlog.String("index_name", indexName),
 		)
-		if appErr := s.createIndex(common.MessageIndex, messageIndexSettings); appErr != nil {
+		if appErr := s.createIndex(indexName, settings); appErr != nil {
 			return appErr
 		}
-		s.Platform.Log().Info("SznSearch: Message index created successfully",
-			mlog.String("index_name", common.MessageIndex),
+		s.Platform.Log().Info("SznSearch: Index created successfully",
+			mlog.String("index_name", indexName),
 		)
 	} else {
-		s.Platform.Log().Info("SznSearch: Message index already exists",
-			mlog.String("index_name", common.MessageIndex),
+		s.Platform.Log().Info("SznSearch: Index already exists",
+			mlog.String("index_name", indexName),
 		)
 	}
 
