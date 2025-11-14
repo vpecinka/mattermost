@@ -86,6 +86,15 @@ func (p *SznSearchCommandProvider) DoCommand(a *app.App, rctx request.CTX, args 
 			}
 		}
 		return p.handleDeltaReindex(a, rctx, args, parts[1])
+	case "user-reindex":
+		username := ""
+		if len(parts) > 1 {
+			// Remove @ prefix if present
+			username = strings.TrimPrefix(parts[1], "@")
+		}
+		return p.handleReindexUser(a, rctx, args, username)
+	case "metadata-reindex":
+		return p.handleReindexMetadata(a, rctx, args)
 	default:
 		return p.showHelp()
 	}
@@ -154,6 +163,8 @@ Available commands:
 - **/sznsearch team-reindex [team_id]** - Reindex all channels in a team (System Admin or Team Admin for their team)
 - **/sznsearch channel-reindex [channel_id]** - Reindex a specific channel (Channel Admin or channel members for DMs/GMs)
 - **/sznsearch delta-reindex <days>** - Reindex posts from the last N days across all channels (System Admin only)
+- **/sznsearch user-reindex [@username]** - Reindex a specific user or all users if username is omitted (System Admin only)
+- **/sznsearch metadata-reindex** - Reindex metadata for all channels (for autocomplete) (System Admin only)
 
 **Note:** Omit team_id/channel_id to use the current team/channel.`
 
@@ -445,6 +456,95 @@ func (p *SznSearchCommandProvider) handleDeltaReindex(a *app.App, rctx request.C
 
 	return &model.CommandResponse{
 		Text:         fmt.Sprintf("Delta reindex started for posts from the last **%d days** in the background. Check server logs for progress.", daysInt),
+		ResponseType: model.CommandResponseTypeEphemeral,
+	}
+}
+
+func (p *SznSearchCommandProvider) handleReindexUser(a *app.App, rctx request.CTX, args *model.CommandArgs, username string) *model.CommandResponse {
+	// Only system admins can reindex users
+	if !a.HasPermissionTo(args.UserId, model.PermissionManageSystem) {
+		return &model.CommandResponse{
+			Text:         "Error: Only System Administrators can reindex users.",
+			ResponseType: model.CommandResponseTypeEphemeral,
+		}
+	}
+
+	if username != "" {
+		rctx.Logger().Info("SznSearch: User requested user reindex",
+			mlog.String("requester_id", args.UserId),
+			mlog.String("target_username", username),
+		)
+	} else {
+		rctx.Logger().Info("SznSearch: User requested full user reindex",
+			mlog.String("requester_id", args.UserId),
+		)
+	}
+
+	// Start async reindexing
+	go func() {
+		ctx := request.EmptyContext(rctx.Logger())
+		if err := p.engine.ReindexUser(ctx, username); err != nil {
+			if username != "" {
+				rctx.Logger().Error("SznSearch: User reindex failed",
+					mlog.String("username", username),
+					mlog.Err(err),
+				)
+			} else {
+				rctx.Logger().Error("SznSearch: Full user reindex failed",
+					mlog.Err(err),
+				)
+			}
+		} else {
+			if username != "" {
+				rctx.Logger().Info("SznSearch: User reindex completed successfully",
+					mlog.String("username", username),
+				)
+			} else {
+				rctx.Logger().Info("SznSearch: Full user reindex completed successfully")
+			}
+		}
+	}()
+
+	if username != "" {
+		return &model.CommandResponse{
+			Text:         fmt.Sprintf("User reindex started for **@%s** in the background. Check server logs for progress.", username),
+			ResponseType: model.CommandResponseTypeEphemeral,
+		}
+	}
+
+	return &model.CommandResponse{
+		Text:         "Full user reindex started in the background. This may take a while. Check server logs for progress.",
+		ResponseType: model.CommandResponseTypeEphemeral,
+	}
+}
+
+func (p *SznSearchCommandProvider) handleReindexMetadata(a *app.App, rctx request.CTX, args *model.CommandArgs) *model.CommandResponse {
+	// Only system admins can reindex metadata
+	if !a.HasPermissionTo(args.UserId, model.PermissionManageSystem) {
+		return &model.CommandResponse{
+			Text:         "Error: Only System Administrators can reindex metadata.",
+			ResponseType: model.CommandResponseTypeEphemeral,
+		}
+	}
+
+	rctx.Logger().Info("SznSearch: User requested metadata reindex",
+		mlog.String("requester_id", args.UserId),
+	)
+
+	// Start async reindexing
+	go func() {
+		ctx := request.EmptyContext(rctx.Logger())
+		if err := p.engine.ReindexMetadata(ctx); err != nil {
+			rctx.Logger().Error("SznSearch: Metadata reindex failed",
+				mlog.Err(err),
+			)
+		} else {
+			rctx.Logger().Info("SznSearch: Metadata reindex completed successfully")
+		}
+	}()
+
+	return &model.CommandResponse{
+		Text:         "Metadata reindex started in the background. This will index all channels for autocomplete. Check server logs for progress.",
 		ResponseType: model.CommandResponseTypeEphemeral,
 	}
 }

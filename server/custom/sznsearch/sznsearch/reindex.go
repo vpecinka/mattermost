@@ -78,7 +78,7 @@ func (s *SznSearchImpl) ReindexChannel(rctx request.CTX, channelID, userID strin
 	}
 	defer s.stopReindex()
 
-	return s.reindexChannelInternal(rctx, channelID, 0)
+	return s.reindexChannelInternal(rctx, channelID, 0, false)
 }
 
 // FullReindexFromDatabase performs a full reindex of all posts from the database
@@ -212,7 +212,7 @@ func (s *SznSearchImpl) reindexChannelsParallel(rctx request.CTX, channels []cha
 			defer wg.Done()
 
 			for channel := range channelJobs {
-				if err := s.reindexChannelInternal(rctx, channel.ID, sinceTime); err != nil {
+				if err := s.reindexChannelInternal(rctx, channel.ID, sinceTime, false); err != nil {
 					rctx.Logger().Error("SznSearch: Failed to reindex channel",
 						mlog.String("channel_id", channel.ID),
 						mlog.String("team_id", channel.TeamID),
@@ -283,10 +283,67 @@ func (s *SznSearchImpl) reindexTeamWithCache(rctx request.CTX, teamID string, ca
 	return nil
 }
 
+// indexChannelMetadata indexes channel metadata for autocomplete
+func (s *SznSearchImpl) indexChannelMetadata(rctx request.CTX, channelID string) *model.AppError {
+	// Get channel from database
+	channel, err := s.Platform.Store.Channel().Get(channelID, true)
+	if err != nil {
+		return model.NewAppError("SznSearch.indexChannelMetadata", "sznsearch.index_channel_metadata.get_channel", nil, err.Error(), 500)
+	}
+
+	// Get user IDs for private channels
+	var userIDs []string
+	if channel.Type == model.ChannelTypePrivate {
+		members, membersErr := s.Platform.Store.Channel().GetMembers(model.ChannelMembersGetOptions{
+			ChannelID: channelID,
+			Offset:    0,
+			Limit:     10000,
+		})
+		if membersErr != nil {
+			rctx.Logger().Error("SznSearch: Failed to get channel members for metadata indexing",
+				mlog.String("channel_id", channelID),
+				mlog.Err(membersErr),
+			)
+			return model.NewAppError("SznSearch.indexChannelMetadata", "sznsearch.index_channel_metadata.get_members", nil, membersErr.Error(), 500)
+		}
+		userIDs = make([]string, 0, len(members))
+		for _, member := range members {
+			userIDs = append(userIDs, member.UserId)
+		}
+	}
+
+	// Get team member IDs if channel has a team
+	var teamMemberIDs []string
+	if channel.TeamId != "" {
+		teamMembers, teamErr := s.Platform.Store.Team().GetMembers(channel.TeamId, 0, 100000, nil)
+		if teamErr != nil {
+			rctx.Logger().Error("SznSearch: Failed to get team members for channel metadata indexing",
+				mlog.String("channel_id", channelID),
+				mlog.String("team_id", channel.TeamId),
+				mlog.Err(teamErr),
+			)
+			// Not critical, continue without team member IDs
+		} else {
+			teamMemberIDs = make([]string, 0, len(teamMembers))
+			for _, member := range teamMembers {
+				teamMemberIDs = append(teamMemberIDs, member.UserId)
+			}
+		}
+	}
+
+	// Index through the public interface (which has all the retry logic and error handling)
+	return s.IndexChannel(rctx, channel, userIDs, teamMemberIDs)
+}
+
 // reindexChannelInternal performs the actual channel reindex without state checking
 // This is used internally by full/team/delta reindex operations
 // If sinceTime is 0, reindexes all posts. Otherwise, reindexes only posts since that timestamp.
-func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID string, sinceTime int64) *model.AppError {
+// If metadataOnly is true, only indexes channel metadata (not posts) for autocomplete.
+func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID string, sinceTime int64, metadataOnly bool) *model.AppError {
+	// If metadata-only mode, just index the channel document and return
+	if metadataOnly {
+		return s.indexChannelMetadata(rctx, channelID)
+	}
 	if sinceTime > 0 {
 		rctx.Logger().Debug("SznSearch: Starting delta channel reindex",
 			mlog.String("channel_id", channelID),
@@ -390,8 +447,14 @@ func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID strin
 }
 
 // buildChannelsCache loads all active (non-deleted) channels into memory for efficient filtering
-// Already filters out ignored teams and channels during construction
+// buildChannelsCache is a wrapper that uses current configuration for ignored channels/teams
 func (s *SznSearchImpl) buildChannelsCache(rctx request.CTX) (*channelsCache, *model.AppError) {
+	return s.buildChannelsCacheWithFilter(rctx, s.ignoreChannels, s.ignoreTeams, true)
+}
+
+// buildChannelsCacheWithFilter builds a cache of all channels, filtering by provided ignored channels/teams
+// includeDMGM controls whether to include DM/GM channels in the cache
+func (s *SznSearchImpl) buildChannelsCacheWithFilter(rctx request.CTX, ignoreChannelIDs, ignoreTeamIDs map[string]bool, includeDMGM bool) (*channelsCache, *model.AppError) {
 	cache := &channelsCache{
 		byTeam:  make(map[string][]channelCacheItem),
 		allList: make([]channelCacheItem, 0),
@@ -407,7 +470,7 @@ func (s *SznSearchImpl) buildChannelsCache(rctx request.CTX) (*channelsCache, *m
 			IncludeDeleted: false, // Skip deleted/archived channels
 		})
 		if err != nil {
-			return nil, model.NewAppError("SznSearch.buildChannelsCache", "sznsearch.reindex.get_channels", nil, err.Error(), 500)
+			return nil, model.NewAppError("SznSearch.buildChannelsCacheWithFilter", "sznsearch.reindex.get_channels", nil, err.Error(), 500)
 		}
 
 		if len(channels) == 0 {
@@ -419,13 +482,13 @@ func (s *SznSearchImpl) buildChannelsCache(rctx request.CTX) (*channelsCache, *m
 			teamID := channel.TeamId // Empty string for DM/GM
 
 			// Skip ignored teams (but allow DM/GM with empty teamID)
-			if teamID != "" && s.ignoreTeams[teamID] {
+			if teamID != "" && ignoreTeamIDs[teamID] {
 				skippedChannels++
 				continue
 			}
 
 			// Skip ignored channels
-			if s.ignoreChannels[channel.Id] {
+			if ignoreChannelIDs[channel.Id] {
 				skippedChannels++
 				continue
 			}
@@ -450,55 +513,57 @@ func (s *SznSearchImpl) buildChannelsCache(rctx request.CTX) (*channelsCache, *m
 		}
 	}
 
-	// 2. Load DM/GM channels separately iterating over all users
-	users, err := s.Platform.Store.User().GetAll()
-	if err != nil {
-		return nil, model.NewAppError("SznSearch.buildChannelsCache", "sznsearch.reindex.get_users", nil, err.Error(), 500)
-	}
-
+	// 2. Load DM/GM channels separately iterating over all users (only if requested)
 	dmChannels := 0
-	seenChannels := make(map[string]bool)
-	for _, user := range users {
-		// skip bot users
-		if user.IsBot {
-			rctx.Logger().Debug("SznSearch: Skipping bot user for DM/GM channels", mlog.String("user_id", user.Id), mlog.String("username", user.Username))
-			continue
-		}
-		// Get DM/GM channels for this user
-		userChannels, err := s.Platform.Store.Channel().GetChannelsByUser(user.Id, false, 0, -1, "")
+	if includeDMGM {
+		users, err := s.Platform.Store.User().GetAll()
 		if err != nil {
-			// log this error and continue with other users
-			rctx.Logger().Warn("SznSearch: Failed to get user channels", mlog.String("user_id", user.Id), mlog.Err(err))
-			continue
+			return nil, model.NewAppError("SznSearch.buildChannelsCacheWithFilter", "sznsearch.reindex.get_users", nil, err.Error(), 500)
 		}
 
-		for _, channel := range userChannels {
-			// Skip already seen channels (to avoid duplicates)
-			if seenChannels[channel.Id] {
+		seenChannels := make(map[string]bool)
+		for _, user := range users {
+			// skip bot users
+			if user.IsBot {
+				rctx.Logger().Debug("SznSearch: Skipping bot user for DM/GM channels", mlog.String("user_id", user.Id), mlog.String("username", user.Username))
 				continue
 			}
-			// skip non-DM/GM channels
-			if channel.Type != model.ChannelTypeDirect && channel.Type != model.ChannelTypeGroup {
-				continue
-			}
-			// Skip ignored channels
-			if s.ignoreChannels[channel.Id] {
-				skippedChannels++
+			// Get DM/GM channels for this user
+			userChannels, err := s.Platform.Store.Channel().GetChannelsByUser(user.Id, false, 0, -1, "")
+			if err != nil {
+				// log this error and continue with other users
+				rctx.Logger().Warn("SznSearch: Failed to get user channels", mlog.String("user_id", user.Id), mlog.Err(err))
 				continue
 			}
 
-			dmChannels++
-			seenChannels[channel.Id] = true
-			item := channelCacheItem{
-				ID:     channel.Id,
-				TeamID: "", // DM/GM channels have no TeamID
-				Type:   channel.Type,
-			}
+			for _, channel := range userChannels {
+				// Skip already seen channels (to avoid duplicates)
+				if seenChannels[channel.Id] {
+					continue
+				}
+				// skip non-DM/GM channels
+				if channel.Type != model.ChannelTypeDirect && channel.Type != model.ChannelTypeGroup {
+					continue
+				}
+				// Skip ignored channels
+				if ignoreChannelIDs[channel.Id] {
+					skippedChannels++
+					continue
+				}
 
-			// Add to both structures
-			cache.byTeam[""] = append(cache.byTeam[""], item)
-			cache.allList = append(cache.allList, item)
-			totalChannels++
+				dmChannels++
+				seenChannels[channel.Id] = true
+				item := channelCacheItem{
+					ID:     channel.Id,
+					TeamID: "", // DM/GM channels have no TeamID
+					Type:   channel.Type,
+				}
+
+				// Add to both structures
+				cache.byTeam[""] = append(cache.byTeam[""], item)
+				cache.allList = append(cache.allList, item)
+				totalChannels++
+			}
 		}
 	}
 
@@ -510,4 +575,242 @@ func (s *SznSearchImpl) buildChannelsCache(rctx request.CTX) (*channelsCache, *m
 	)
 
 	return cache, nil
+}
+
+// ReindexUser reindexes a specific user or all users
+func (s *SznSearchImpl) ReindexUser(rctx request.CTX, username string) *model.AppError {
+	if !s.IsActive() {
+		return model.NewAppError("SznSearch.ReindexUser", "sznsearch.reindex_user.not_active", nil, "", 500)
+	}
+
+	if username != "" {
+		// Reindex specific user
+		rctx.Logger().Info("SznSearch: Starting user reindex",
+			mlog.String("username", username),
+		)
+		return s.reindexSingleUser(rctx, username)
+	}
+
+	// Reindex all users
+	rctx.Logger().Info("SznSearch: Starting full user reindex")
+	return s.reindexAllUsers(rctx)
+}
+
+// reindexSingleUser reindexes a single user by username
+func (s *SznSearchImpl) reindexSingleUser(rctx request.CTX, username string) *model.AppError {
+	// Get user by username
+	user, err := s.Platform.Store.User().GetByUsername(username)
+	if err != nil {
+		return model.NewAppError("SznSearch.reindexSingleUser", "sznsearch.reindex_user.get_user", nil, err.Error(), 404)
+	}
+
+	// Get user's teams
+	teamMembers, err := s.Platform.Store.Team().GetTeamsForUser(rctx, user.Id, "", true)
+	if err != nil {
+		rctx.Logger().Error("SznSearch: Failed to get teams for user",
+			mlog.String("user_id", user.Id),
+			mlog.Err(err),
+		)
+		return model.NewAppError("SznSearch.reindexSingleUser", "sznsearch.reindex_user.get_teams", nil, err.Error(), 500)
+	}
+
+	teamIds := make([]string, 0, len(teamMembers))
+	for _, tm := range teamMembers {
+		teamIds = append(teamIds, tm.TeamId)
+	}
+
+	// Get user's channels
+	channelMembers, err := s.Platform.Store.Channel().GetAllChannelMembersForUser(rctx, user.Id, false, true)
+	if err != nil {
+		rctx.Logger().Error("SznSearch: Failed to get channels for user",
+			mlog.String("user_id", user.Id),
+			mlog.Err(err),
+		)
+		return model.NewAppError("SznSearch.reindexSingleUser", "sznsearch.reindex_user.get_channels", nil, err.Error(), 500)
+	}
+
+	channelIds := make([]string, 0, len(channelMembers))
+	for channelId := range channelMembers {
+		channelIds = append(channelIds, channelId)
+	}
+
+	// Index the user
+	if indexErr := s.IndexUser(rctx, user, teamIds, channelIds); indexErr != nil {
+		return indexErr
+	}
+
+	rctx.Logger().Info("SznSearch: User reindexed successfully",
+		mlog.String("user_id", user.Id),
+		mlog.String("username", user.Username),
+		mlog.Int("teams_count", len(teamIds)),
+		mlog.Int("channels_count", len(channelIds)),
+	)
+
+	return nil
+}
+
+// reindexAllUsers reindexes all users in the system
+func (s *SznSearchImpl) reindexAllUsers(rctx request.CTX) *model.AppError {
+	const batchSize = 100
+	page := 0
+	totalIndexed := 0
+	totalErrors := 0
+
+	rctx.Logger().Info("SznSearch: Starting batch user indexing",
+		mlog.Int("batch_size", batchSize),
+	)
+
+	for {
+		// Get batch of users
+		users, err := s.Platform.Store.User().GetAllProfiles(&model.UserGetOptions{
+			Page:    page,
+			PerPage: batchSize,
+		})
+		if err != nil {
+			rctx.Logger().Error("SznSearch: Failed to get users batch",
+				mlog.Int("page", page),
+				mlog.Err(err),
+			)
+			return model.NewAppError("SznSearch.reindexAllUsers", "sznsearch.reindex_all_users.get_users", nil, err.Error(), 500)
+		}
+
+		if len(users) == 0 {
+			break
+		}
+
+		// Index each user in the batch
+		for _, user := range users {
+			// Skip deleted users
+			if user.DeleteAt != 0 {
+				continue
+			}
+
+			// Get user's teams
+			teamMembers, teamErr := s.Platform.Store.Team().GetTeamsForUser(rctx, user.Id, "", true)
+			if teamErr != nil {
+				rctx.Logger().Error("SznSearch: Failed to get teams for user during batch reindex",
+					mlog.String("user_id", user.Id),
+					mlog.Err(teamErr),
+				)
+				totalErrors++
+				continue
+			}
+
+			teamIds := make([]string, 0, len(teamMembers))
+			for _, tm := range teamMembers {
+				teamIds = append(teamIds, tm.TeamId)
+			}
+
+			// Get user's channels
+			channelMembers, chanErr := s.Platform.Store.Channel().GetAllChannelMembersForUser(rctx, user.Id, false, true)
+			if chanErr != nil {
+				rctx.Logger().Error("SznSearch: Failed to get channels for user during batch reindex",
+					mlog.String("user_id", user.Id),
+					mlog.Err(chanErr),
+				)
+				totalErrors++
+				continue
+			}
+
+			channelIds := make([]string, 0, len(channelMembers))
+			for channelId := range channelMembers {
+				channelIds = append(channelIds, channelId)
+			}
+
+			// Index the user
+			if indexErr := s.IndexUser(rctx, user, teamIds, channelIds); indexErr != nil {
+				rctx.Logger().Error("SznSearch: Failed to index user during batch reindex",
+					mlog.String("user_id", user.Id),
+					mlog.String("username", user.Username),
+					mlog.Err(indexErr),
+				)
+				totalErrors++
+				continue
+			}
+
+			totalIndexed++
+		}
+
+		rctx.Logger().Info("SznSearch: Batch user indexing progress",
+			mlog.Int("page", page),
+			mlog.Int("batch_size", len(users)),
+			mlog.Int("total_indexed", totalIndexed),
+			mlog.Int("total_errors", totalErrors),
+		)
+
+		// Move to next page
+		page++
+
+		// Small delay to avoid overwhelming the system
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	rctx.Logger().Info("SznSearch: Batch user indexing completed",
+		mlog.Int("total_indexed", totalIndexed),
+		mlog.Int("total_errors", totalErrors),
+	)
+
+	if totalErrors > 0 {
+		return model.NewAppError("SznSearch.reindexAllUsers", "sznsearch.reindex_all_users.partial_failure",
+			map[string]any{"TotalIndexed": totalIndexed, "TotalErrors": totalErrors}, "", 500)
+	}
+
+	return nil
+}
+
+// ReindexMetadata reindexes metadata for all channels (without posts)
+// In the future, this can be extended to reindex other metadata like users
+func (s *SznSearchImpl) ReindexMetadata(rctx request.CTX) *model.AppError {
+	if !s.IsActive() {
+		return model.NewAppError("SznSearch.ReindexMetadata", "sznsearch.reindex.not_active", nil, "", 500)
+	}
+
+	rctx.Logger().Info("SznSearch: Starting metadata reindexing")
+
+	// Build channels cache WITHOUT filtering - we need all channels for autocomplete
+	// Exclude DM/GM channels - they are not used in channel autocomplete
+	emptyIgnoreChannels := make(map[string]bool)
+	emptyIgnoreTeams := make(map[string]bool)
+	cache, err := s.buildChannelsCacheWithFilter(rctx, emptyIgnoreChannels, emptyIgnoreTeams, false)
+	if err != nil {
+		return model.NewAppError("SznSearch.ReindexMetadata", "sznsearch.reindex_metadata.build_cache", nil, err.Error(), 500)
+	}
+
+	totalIndexed := 0
+	totalErrors := 0
+
+	// Iterate through all channels in cache (DM/GM already excluded by includeDMGM=false)
+	for _, channelItem := range cache.allList {
+		// Index channel metadata
+		if indexErr := s.indexChannelMetadata(rctx, channelItem.ID); indexErr != nil {
+			rctx.Logger().Error("SznSearch: Failed to index channel metadata during reindex",
+				mlog.String("channel_id", channelItem.ID),
+				mlog.Err(indexErr),
+			)
+			totalErrors++
+			continue
+		}
+
+		totalIndexed++
+
+		// Log progress every 100 channels
+		if totalIndexed%100 == 0 {
+			rctx.Logger().Info("SznSearch: Metadata reindex progress",
+				mlog.Int("total_indexed", totalIndexed),
+				mlog.Int("total_errors", totalErrors),
+			)
+		}
+	}
+
+	rctx.Logger().Info("SznSearch: Metadata reindexing completed",
+		mlog.Int("total_indexed", totalIndexed),
+		mlog.Int("total_errors", totalErrors),
+	)
+
+	if totalErrors > 0 {
+		return model.NewAppError("SznSearch.ReindexMetadata", "sznsearch.reindex_metadata.partial_failure",
+			map[string]any{"TotalIndexed": totalIndexed, "TotalErrors": totalErrors}, "", 500)
+	}
+
+	return nil
 }
