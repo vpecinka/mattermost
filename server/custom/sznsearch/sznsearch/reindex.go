@@ -365,13 +365,13 @@ func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID strin
 		// Choose method based on reindex type
 		if sinceTime > 0 {
 			// Delta reindex: use GetPostsSince (no pagination needed)
-			postList, err = s.Platform.Store.Post().GetPostsSince(model.GetPostsSinceOptions{
+			postList, err = s.Platform.Store.Post().GetPostsSince(rctx, model.GetPostsSinceOptions{
 				ChannelId: channelID,
 				Time:      sinceTime,
 			}, false, map[string]bool{})
 		} else {
 			// Full reindex: use paginated GetPosts
-			postList, err = s.Platform.Store.Post().GetPosts(model.GetPostsOptions{
+			postList, err = s.Platform.Store.Post().GetPosts(rctx, model.GetPostsOptions{
 				ChannelId: channelID,
 				Page:      offset / maxPerPage,
 				PerPage:   maxPerPage,
