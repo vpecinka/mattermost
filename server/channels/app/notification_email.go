@@ -98,6 +98,11 @@ func (a *App) buildEmailNotification(
 	if emailNotificationContentsType == model.EmailNotificationContentsFull {
 		messageHTML = a.GetMessageForNotification(post, team.Name, a.GetSiteURL(), translateFunc)
 		messageText = post.Message
+
+		// Ensure attachments are shown even if message is empty
+		if messageHTML == "" && len(post.Attachments()) > 0 {
+			messageHTML = " " // non-empty string to trigger attachment processing
+		}
 	}
 
 	landingURL := a.GetSiteURL() + "/landing#/" + team.Name
