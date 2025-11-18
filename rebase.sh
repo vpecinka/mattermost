@@ -55,11 +55,22 @@ if [[ -z $(git status --porcelain) ]]; then
     echo -e "\n${YELLOW}Step 5: Pushing to origin/szn-build...${NC}"
     if git push origin szn-build --force-with-lease; then
         echo -e "${GREEN}✓ Successfully pushed to origin/szn-build${NC}"
-        echo -e "\n${GREEN}=== Rebase completed successfully! ===${NC}"
     else
         echo -e "${RED}✗ Failed to push to origin${NC}"
         echo -e "${YELLOW}Please push manually:${NC}"
         echo -e "  ${GREEN}git push origin szn-build --force-with-lease${NC}"
+        exit 1
+    fi
+    
+    # Step 6: Push to github
+    echo -e "\n${YELLOW}Step 6: Pushing to github/szn-build...${NC}"
+    if git push github szn-build --force-with-lease; then
+        echo -e "${GREEN}✓ Successfully pushed to github/szn-build${NC}"
+        echo -e "\n${GREEN}=== Rebase completed successfully! ===${NC}"
+    else
+        echo -e "${RED}✗ Failed to push to github${NC}"
+        echo -e "${YELLOW}Please push manually:${NC}"
+        echo -e "  ${GREEN}git push github szn-build --force-with-lease${NC}"
         exit 1
     fi
 else
