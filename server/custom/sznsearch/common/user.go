@@ -6,11 +6,6 @@ import (
 	"github.com/mattermost/mattermost/server/public/model"
 )
 
-const (
-	UserIndex    = "users"
-	ChannelIndex = "channels"
-)
-
 // ESChannel represents a channel document in ElasticSearch
 type ESChannel struct {
 	Id            string            `json:"id"`
@@ -167,4 +162,65 @@ func ESChannelFromChannel(channel *model.Channel, userIDs, teamMemberIDs []strin
 		TeamMemberIDs: teamMemberIDs,
 		NameSuggest:   append(displayNameInputs, nameInputs...),
 	}
+}
+
+// SplitFilenameWords splits filename by common separators for better search
+// Example: "my-document.pdf" returns "my document pdf"
+func SplitFilenameWords(name string) string {
+	result := name
+	result = strings.ReplaceAll(result, "-", " ")
+	result = strings.ReplaceAll(result, ".", " ")
+	result = strings.ReplaceAll(result, "_", " ")
+	return result
+}
+
+// ESFileFromFileInfo creates an IndexedFile from a FileInfo
+// This function creates a NEW object for indexing and does NOT modify the original FileInfo.
+// Content extraction and truncation happens here to avoid side effects on the original object.
+func ESFileFromFileInfo(file *model.FileInfo, channelId string) *IndexedFile {
+	// Combine original name with split variations for better search matching
+	// Example: "my-document.pdf" becomes "my-document.pdf my document pdf"
+	splitWords := SplitFilenameWords(file.Name)
+	nameWithVariations := file.Name
+	if splitWords != file.Name && splitWords != "" {
+		nameWithVariations = file.Name + " " + splitWords
+	}
+
+	// Prepare content for indexing (extraction + size limit)
+	indexedContent := prepareFileContentForIndexing(file)
+
+	// Normalize extension to lowercase for consistent filtering
+	extension := strings.ToLower(file.Extension)
+
+	return &IndexedFile{
+		ID:        file.Id,
+		Name:      nameWithVariations,
+		Content:   indexedContent, // Prepared content (original FileInfo unchanged)
+		Extension: extension,
+		CreatorId: file.CreatorId,
+		ChannelId: channelId,
+		PostId:    file.PostId,
+		CreateAt:  file.CreateAt,
+	}
+}
+
+// prepareFileContentForIndexing prepares file content for ElasticSearch indexing.
+// It extracts content from files (if not already extracted), filters out binary data,
+// and applies size limits. Returns empty string for images and binary files.
+func prepareFileContentForIndexing(file *model.FileInfo) string {
+	// Skip images - they don't have searchable text content
+	if file.IsImage() {
+		return ""
+	}
+
+	// Extract content (from cache or by actual extraction)
+	content := extractFileContent(file)
+
+	// Limit content size to prevent memory issues and ES document size limits (5MB)
+	const maxFileContentLength = 5 * 1024 * 1024
+	if len(content) > maxFileContentLength {
+		content = content[:maxFileContentLength]
+	}
+
+	return content
 }

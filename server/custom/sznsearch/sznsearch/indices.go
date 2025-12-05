@@ -153,6 +153,73 @@ var channelIndexSettings = map[string]any{
 	},
 }
 
+// Index settings for file indexing with Czech language analyzer
+var fileIndexSettings = map[string]any{
+	"settings": map[string]any{
+		"index": map[string]any{
+			"number_of_replicas": 2,
+			"number_of_shards":   3,
+			"analysis": map[string]any{
+				"analyzer": map[string]any{
+					"czech": map[string]any{
+						"type":      "custom",
+						"tokenizer": "standard",
+						"filter": []string{
+							"czech_stop",
+							"czech_hunspell",
+							"lowercase",
+							"czech_stop",
+							"icu_folding",
+							"unique_on_same_position",
+						},
+					},
+				},
+				"filter": map[string]any{
+					"czech_hunspell": map[string]any{
+						"type":   "hunspell",
+						"locale": "cs_CZ",
+					},
+					"czech_stop": map[string]any{
+						"type":      "stop",
+						"stopwords": []string{"že", "_czech_"},
+					},
+					"unique_on_same_position": map[string]any{
+						"type":                  "unique",
+						"only_on_same_position": true,
+					},
+				},
+			},
+		},
+	},
+	"mappings": map[string]any{
+		"properties": map[string]any{
+			"Name": map[string]any{
+				"type":     "text",
+				"analyzer": "czech",
+			},
+			"Content": map[string]any{
+				"type":     "text",
+				"analyzer": "czech",
+			},
+			"Extension": map[string]any{
+				"type": "keyword",
+			},
+			"CreatorId": map[string]any{
+				"type": "keyword",
+			},
+			"ChannelId": map[string]any{
+				"type": "keyword",
+			},
+			"PostId": map[string]any{
+				"type": "keyword",
+			},
+			"CreateAt": map[string]any{
+				"type": "long",
+			},
+		},
+	},
+}
+
 // indexDefinition holds index name and its settings
 type indexDefinition struct {
 	name     string
@@ -167,6 +234,7 @@ func (s *SznSearchImpl) ensureIndices() error {
 		{name: common.MessageIndex, settings: messageIndexSettings},
 		{name: common.UserIndex, settings: userIndexSettings},
 		{name: common.ChannelIndex, settings: channelIndexSettings},
+		{name: common.FileIndex, settings: fileIndexSettings},
 	}
 
 	for _, idx := range indices {

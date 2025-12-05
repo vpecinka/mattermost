@@ -32,7 +32,8 @@ type channelsCache struct {
 
 // ReindexTeam reindexes all channels in a team
 // Pass empty teamID ("") to reindex all DM/GM channels
-func (s *SznSearchImpl) ReindexTeam(rctx request.CTX, teamID, userID string) *model.AppError {
+// mode parameter controls what gets reindexed (posts_only, files_only, or with_files)
+func (s *SznSearchImpl) ReindexTeam(rctx request.CTX, teamID, userID string, mode common.ReindexMode) *model.AppError {
 	if !s.IsActive() {
 		return model.NewAppError("SznSearch.ReindexTeam", "sznsearch.reindex.not_active", nil, "", 500)
 	}
@@ -56,11 +57,12 @@ func (s *SznSearchImpl) ReindexTeam(rctx request.CTX, teamID, userID string) *mo
 		return err
 	}
 
-	return s.reindexTeamWithCache(rctx, teamID, cache)
+	return s.reindexTeamWithCache(rctx, teamID, cache, mode)
 }
 
 // ReindexChannel reindexes all posts in a channel
-func (s *SznSearchImpl) ReindexChannel(rctx request.CTX, channelID, userID string) *model.AppError {
+// mode parameter controls what gets reindexed (posts_only, files_only, or with_files)
+func (s *SznSearchImpl) ReindexChannel(rctx request.CTX, channelID, userID string, mode common.ReindexMode) *model.AppError {
 	if !s.IsActive() {
 		return model.NewAppError("SznSearch.ReindexChannel", "sznsearch.reindex.not_active", nil, "", 500)
 	}
@@ -78,11 +80,13 @@ func (s *SznSearchImpl) ReindexChannel(rctx request.CTX, channelID, userID strin
 	}
 	defer s.stopReindex()
 
-	return s.reindexChannelInternal(rctx, channelID, 0, false)
+	return s.reindexChannelInternal(rctx, channelID, 0, false, mode)
 }
 
-// FullReindexFromDatabase performs a full reindex of all posts from the database
-func (s *SznSearchImpl) FullReindexFromDatabase(rctx request.CTX, userID string, shouldRecreateIndex bool) *model.AppError {
+// FullReindexFromDatabase performs a full reindex of all data from the database
+// shouldRecreateIndex: if true, deletes and recreates all indices before reindexing
+// mode: controls what gets reindexed (posts_only, files_only, or with_files)
+func (s *SznSearchImpl) FullReindexFromDatabase(rctx request.CTX, userID string, shouldRecreateIndex bool, mode common.ReindexMode) *model.AppError {
 	if !s.IsActive() {
 		return model.NewAppError("SznSearch.FullReindexFromDatabase", "sznsearch.reindex.not_active", nil, "", 500)
 	}
@@ -102,6 +106,7 @@ func (s *SznSearchImpl) FullReindexFromDatabase(rctx request.CTX, userID string,
 
 	rctx.Logger().Info("SznSearch: Starting full database reindex",
 		mlog.Bool("recreate_index", shouldRecreateIndex),
+		mlog.String("mode", string(mode)),
 	)
 
 	// Optionally purge and recreate indices if requested
@@ -121,18 +126,20 @@ func (s *SznSearchImpl) FullReindexFromDatabase(rctx request.CTX, userID string,
 	}
 
 	// Reindex all channels using global worker pool (sinceTime = 0 means full reindex)
-	errorCount := s.reindexChannelsParallel(rctx, cache.allList, 0)
+	errorCount := s.reindexChannelsParallel(rctx, cache.allList, 0, mode)
 
 	rctx.Logger().Info("SznSearch: Full reindex completed",
 		mlog.Int("total_channels", len(cache.allList)),
 		mlog.Int("errors", errorCount),
+		mlog.String("mode", string(mode)),
 	)
 
 	return nil
 }
 
-// DeltaReindexFromDatabase performs a delta reindex of posts created/updated within the last N days
-func (s *SznSearchImpl) DeltaReindexFromDatabase(rctx request.CTX, userID string, days int) *model.AppError {
+// DeltaReindexFromDatabase performs a delta reindex of data created/updated within the last N days
+// mode parameter controls what gets reindexed (posts_only, files_only, or with_files)
+func (s *SznSearchImpl) DeltaReindexFromDatabase(rctx request.CTX, userID string, days int, mode common.ReindexMode) *model.AppError {
 	if !s.IsActive() {
 		return model.NewAppError("SznSearch.DeltaReindexFromDatabase", "sznsearch.reindex.not_active", nil, "", 500)
 	}
@@ -150,7 +157,10 @@ func (s *SznSearchImpl) DeltaReindexFromDatabase(rctx request.CTX, userID string
 	}
 	defer s.stopReindex()
 
-	rctx.Logger().Info("SznSearch: Starting delta database reindex", mlog.Int("days", days))
+	rctx.Logger().Info("SznSearch: Starting delta database reindex",
+		mlog.Int("days", days),
+		mlog.String("mode", string(mode)),
+	)
 
 	// Calculate timestamp (days ago in milliseconds)
 	sinceTime := model.GetMillis() - int64(days*24*60*60*1000)
@@ -164,15 +174,17 @@ func (s *SznSearchImpl) DeltaReindexFromDatabase(rctx request.CTX, userID string
 	rctx.Logger().Info("SznSearch: Delta reindexing channels",
 		mlog.Int("total_channels", len(cache.allList)),
 		mlog.String("since_timestamp", fmt.Sprintf("%d", sinceTime)),
+		mlog.String("mode", string(mode)),
 	)
 
 	// Reindex channels with delta logic using parallel workers
-	errorCount := s.reindexChannelsParallel(rctx, cache.allList, sinceTime)
+	errorCount := s.reindexChannelsParallel(rctx, cache.allList, sinceTime, mode)
 
 	rctx.Logger().Info("SznSearch: Delta reindex completed",
 		mlog.Int("total_channels", len(cache.allList)),
 		mlog.Int("days", days),
 		mlog.Int("errors", errorCount),
+		mlog.String("mode", string(mode)),
 	)
 
 	return nil
@@ -181,7 +193,8 @@ func (s *SznSearchImpl) DeltaReindexFromDatabase(rctx request.CTX, userID string
 // reindexChannelsParallel reindexes multiple channels in parallel using a worker pool
 // This is a shared function used by both full reindex and delta reindex
 // If sinceTime is 0, performs full reindex. Otherwise, reindexes only posts since that timestamp.
-func (s *SznSearchImpl) reindexChannelsParallel(rctx request.CTX, channels []channelCacheItem, sinceTime int64) int {
+// mode parameter controls what gets reindexed (posts_only, files_only, or with_files)
+func (s *SznSearchImpl) reindexChannelsParallel(rctx request.CTX, channels []channelCacheItem, sinceTime int64, mode common.ReindexMode) int {
 
 	channelCount := len(channels)
 	if channelCount == 0 {
@@ -193,6 +206,7 @@ func (s *SznSearchImpl) reindexChannelsParallel(rctx request.CTX, channels []cha
 	logFields := []mlog.Field{
 		mlog.Int("channel_count", channelCount),
 		mlog.Int("pool_size", s.reindexPoolSize),
+		mlog.String("mode", string(mode)),
 	}
 	if sinceTime > 0 {
 		logMsg = "SznSearch: Processing delta reindex with worker pool"
@@ -212,11 +226,12 @@ func (s *SznSearchImpl) reindexChannelsParallel(rctx request.CTX, channels []cha
 			defer wg.Done()
 
 			for channel := range channelJobs {
-				if err := s.reindexChannelInternal(rctx, channel.ID, sinceTime, false); err != nil {
+				if err := s.reindexChannelInternal(rctx, channel.ID, sinceTime, false, mode); err != nil {
 					rctx.Logger().Error("SznSearch: Failed to reindex channel",
 						mlog.String("channel_id", channel.ID),
 						mlog.String("team_id", channel.TeamID),
 						mlog.Int("worker_id", workerID),
+						mlog.String("mode", string(mode)),
 						mlog.Err(err),
 					)
 					errors <- err
@@ -246,15 +261,21 @@ func (s *SznSearchImpl) reindexChannelsParallel(rctx request.CTX, channels []cha
 
 // reindexTeamWithCache reindexes all channels in a team using provided cache
 // Cache is already filtered for ignored teams/channels
-func (s *SznSearchImpl) reindexTeamWithCache(rctx request.CTX, teamID string, cache *channelsCache) *model.AppError {
+// mode parameter controls what gets reindexed (posts_only, files_only, or with_files)
+func (s *SznSearchImpl) reindexTeamWithCache(rctx request.CTX, teamID string, cache *channelsCache, mode common.ReindexMode) *model.AppError {
 	if !s.IsActive() {
 		return model.NewAppError("SznSearch.reindexTeamWithCache", "sznsearch.reindex.not_active", nil, "", 500)
 	}
 
 	if teamID == "" {
-		rctx.Logger().Info("SznSearch: Starting direct/group messages reindex")
+		rctx.Logger().Info("SznSearch: Starting direct/group messages reindex",
+			mlog.String("mode", string(mode)),
+		)
 	} else {
-		rctx.Logger().Info("SznSearch: Starting team reindex", mlog.String("team_id", teamID))
+		rctx.Logger().Info("SznSearch: Starting team reindex",
+			mlog.String("team_id", teamID),
+			mlog.String("mode", string(mode)),
+		)
 	}
 
 	// Get channels for this team from cache (already filtered)
@@ -265,18 +286,20 @@ func (s *SznSearchImpl) reindexTeamWithCache(rctx request.CTX, teamID string, ca
 	}
 
 	// Use shared parallel reindex function with pre-filtered channels (sinceTime = 0 means full reindex)
-	errorCount := s.reindexChannelsParallel(rctx, channels, 0)
+	errorCount := s.reindexChannelsParallel(rctx, channels, 0, mode)
 
 	if teamID == "" {
 		rctx.Logger().Info("SznSearch: Direct/group messages reindex completed",
 			mlog.Int("total_channels", len(channels)),
 			mlog.Int("errors", errorCount),
+			mlog.String("mode", string(mode)),
 		)
 	} else {
 		rctx.Logger().Info("SznSearch: Team reindex completed",
 			mlog.String("team_id", teamID),
 			mlog.Int("total_channels", len(channels)),
 			mlog.Int("errors", errorCount),
+			mlog.String("mode", string(mode)),
 		)
 	}
 
@@ -339,7 +362,8 @@ func (s *SznSearchImpl) indexChannelMetadata(rctx request.CTX, channelID string)
 // This is used internally by full/team/delta reindex operations
 // If sinceTime is 0, reindexes all posts. Otherwise, reindexes only posts since that timestamp.
 // If metadataOnly is true, only indexes channel metadata (not posts) for autocomplete.
-func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID string, sinceTime int64, metadataOnly bool) *model.AppError {
+// mode parameter controls what gets reindexed (posts_only, files_only, or with_files)
+func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID string, sinceTime int64, metadataOnly bool, mode common.ReindexMode) *model.AppError {
 	// If metadata-only mode, just index the channel document and return
 	if metadataOnly {
 		return s.indexChannelMetadata(rctx, channelID)
@@ -354,10 +378,11 @@ func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID strin
 	}
 
 	totalPosts := 0
+	totalFiles := 0
 	offset := 0
 	const maxPerPage = 1000 // Mattermost API limit for GetPosts
 
-	// Unified pagination loop for both full and delta reindex
+	// Single unified loop through posts - index posts and/or files based on mode
 	for {
 		var postList *model.PostList
 		var err error
@@ -390,38 +415,90 @@ func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID strin
 			break
 		}
 
-		// Prepare batch for indexing
-		batch := make([]common.IndexedMessage, 0, len(postList.Posts))
+		// Prepare batch for posts indexing (if mode requires it)
+		var postBatch []common.IndexedMessage
+		if mode == common.ReindexModePostsOnly || mode == common.ReindexModeWithFiles {
+			postBatch = make([]common.IndexedMessage, 0, len(postList.Posts))
+		}
+
+		// Collect file IDs for files indexing (if mode requires it)
+		var fileIDs []string
+		if mode == common.ReindexModeFilesOnly || mode == common.ReindexModeWithFiles {
+			fileIDs = make([]string, 0)
+		}
+
+		// Process each post
 		for _, post := range postList.Posts {
-			// Skip deleted posts (DeleteAt > 0)
-			// Note: Skipping posts here doesn't affect pagination logic - we still process
-			// all pages based on postList.Posts count from DB, not indexed count
+			// Skip deleted posts
 			if post.DeleteAt > 0 {
 				continue
 			}
 
-			msg, appErr := s.formatPostForIndex(post)
-			if appErr != nil {
-				rctx.Logger().Error("SznSearch: Failed to format post for reindex",
-					mlog.String("post_id", post.Id),
-					mlog.Err(appErr),
-				)
-				continue
+			// Index post message if mode requires it
+			if mode == common.ReindexModePostsOnly || mode == common.ReindexModeWithFiles {
+				msg, appErr := s.formatPostForIndex(post)
+				if appErr != nil {
+					rctx.Logger().Error("SznSearch: Failed to format post for reindex",
+						mlog.String("post_id", post.Id),
+						mlog.Err(appErr),
+					)
+				} else {
+					postBatch = append(postBatch, *msg)
+				}
 			}
-			batch = append(batch, *msg)
+
+			// Collect file IDs if mode requires it
+			if (mode == common.ReindexModeFilesOnly || mode == common.ReindexModeWithFiles) && len(post.FileIds) > 0 {
+				fileIDs = append(fileIDs, post.FileIds...)
+			}
 		}
 
-		// Index the batch
-		if len(batch) > 0 {
-			if err := s.indexMessageBatch(batch); err != nil {
-				rctx.Logger().Error("SznSearch: Failed to index batch during reindex",
+		// Index post batch
+		if len(postBatch) > 0 {
+			if err := s.indexMessageBatch(postBatch); err != nil {
+				rctx.Logger().Error("SznSearch: Failed to index post batch during reindex",
 					mlog.String("channel_id", channelID),
-					mlog.Int("batch_size", len(batch)),
+					mlog.Int("batch_size", len(postBatch)),
 					mlog.Err(err),
 				)
 				return err
 			}
-			totalPosts += len(batch)
+			totalPosts += len(postBatch)
+		}
+
+		// Index files
+		if len(fileIDs) > 0 {
+			files, fileErr := s.Platform.Store.FileInfo().GetByIds(fileIDs, true, true)
+			if fileErr != nil {
+				rctx.Logger().Error("SznSearch: Failed to get files by IDs during reindex",
+					mlog.String("channel_id", channelID),
+					mlog.Err(fileErr),
+				)
+				// Continue with post indexing even if file fetch fails
+			} else {
+				// Index each file
+				for _, file := range files {
+					// Check circuit breaker
+					if !s.circuitBreaker.AllowRequest() {
+						rctx.Logger().Warn("SznSearch: Circuit breaker open, stopping file reindex",
+							mlog.String("channel_id", channelID),
+						)
+						return model.NewAppError("SznSearch.reindexChannelInternal", "sznsearch.circuit_breaker_open", nil, "Circuit breaker is open", 500)
+					}
+
+					if indexErr := s.IndexFile(file, channelID); indexErr != nil {
+						rctx.Logger().Error("SznSearch: Failed to index file during reindex",
+							mlog.String("file_id", file.Id),
+							mlog.String("channel_id", channelID),
+							mlog.Err(indexErr),
+						)
+						// Continue with other files - error is logged but doesn't increment counter
+					} else {
+						// Only increment counter on successful indexation
+						totalFiles++
+					}
+				}
+			}
 		}
 
 		// For delta reindex, GetPostsSince returns all matching posts at once (no pagination)
@@ -430,8 +507,6 @@ func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID strin
 		}
 
 		// For full reindex, check if we need to fetch next page
-		// Pagination is based on posts returned from DB (postList.Posts), not posts actually indexed
-		// This ensures we traverse all DB pages correctly even if we skip some deleted posts
 		offset += maxPerPage
 		if len(postList.Posts) < maxPerPage {
 			break // Last page - DB returned fewer posts than requested
@@ -441,6 +516,8 @@ func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID strin
 	rctx.Logger().Debug("SznSearch: Channel reindex completed",
 		mlog.String("channel_id", channelID),
 		mlog.Int("total_posts", totalPosts),
+		mlog.Int("total_files", totalFiles),
+		mlog.String("mode", string(mode)),
 	)
 
 	return nil

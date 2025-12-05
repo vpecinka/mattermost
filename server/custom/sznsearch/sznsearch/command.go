@@ -64,20 +64,62 @@ func (p *SznSearchCommandProvider) DoCommand(a *app.App, rctx request.CTX, args 
 	case "remove-index":
 		return p.handleRemoveIndex(a, rctx, args)
 	case "full-reindex":
-		shouldRecreate := len(parts) > 1 && parts[1] == "recreate"
-		return p.handleFullReindex(a, rctx, args, shouldRecreate)
+		freshIndex := false
+		mode := common.ReindexModePostsOnly
+
+		// Parse flags
+		for i := 1; i < len(parts); i++ {
+			switch parts[i] {
+			case "--fresh-index":
+				freshIndex = true
+			case "--files-only":
+				mode = common.ReindexModeFilesOnly
+			case "--with-files":
+				mode = common.ReindexModeWithFiles
+			}
+		}
+
+		return p.handleFullReindex(a, rctx, args, freshIndex, mode)
 	case "team-reindex":
 		teamID := args.TeamId // Default to current team
-		if len(parts) > 1 {
-			teamID = parts[1]
+		mode := common.ReindexModePostsOnly
+
+		// Parse parameters and flags
+		for i := 1; i < len(parts); i++ {
+			switch parts[i] {
+			case "--files-only":
+				mode = common.ReindexModeFilesOnly
+			case "--with-files":
+				mode = common.ReindexModeWithFiles
+			default:
+				// Assume it's a team ID if not a flag
+				if !strings.HasPrefix(parts[i], "--") {
+					teamID = parts[i]
+				}
+			}
 		}
-		return p.handleTeamReindex(a, rctx, args, teamID)
+
+		return p.handleTeamReindex(a, rctx, args, teamID, mode)
 	case "channel-reindex":
 		channelID := args.ChannelId // Default to current channel
-		if len(parts) > 1 {
-			channelID = parts[1]
+		mode := common.ReindexModePostsOnly
+
+		// Parse parameters and flags
+		for i := 1; i < len(parts); i++ {
+			switch parts[i] {
+			case "--files-only":
+				mode = common.ReindexModeFilesOnly
+			case "--with-files":
+				mode = common.ReindexModeWithFiles
+			default:
+				// Assume it's a channel ID if not a flag
+				if !strings.HasPrefix(parts[i], "--") {
+					channelID = parts[i]
+				}
+			}
 		}
-		return p.handleChannelReindex(a, rctx, args, channelID)
+
+		return p.handleChannelReindex(a, rctx, args, channelID, mode)
 	case "delta-reindex":
 		if len(parts) < 2 {
 			return &model.CommandResponse{
@@ -85,7 +127,21 @@ func (p *SznSearchCommandProvider) DoCommand(a *app.App, rctx request.CTX, args 
 				ResponseType: model.CommandResponseTypeEphemeral,
 			}
 		}
-		return p.handleDeltaReindex(a, rctx, args, parts[1])
+
+		daysStr := parts[1]
+		mode := common.ReindexModePostsOnly
+
+		// Parse flags
+		for i := 2; i < len(parts); i++ {
+			switch parts[i] {
+			case "--files-only":
+				mode = common.ReindexModeFilesOnly
+			case "--with-files":
+				mode = common.ReindexModeWithFiles
+			}
+		}
+
+		return p.handleDeltaReindex(a, rctx, args, daysStr, mode)
 	case "user-reindex":
 		username := ""
 		if len(parts) > 1 {
@@ -159,14 +215,18 @@ func (p *SznSearchCommandProvider) showHelp() *model.CommandResponse {
 
 Available commands:
 - **/sznsearch remove-index** - Remove and recreate the search index (System Admin only)
-- **/sznsearch full-reindex [recreate]** - Reindex all posts from database. Add 'recreate' to delete and recreate the index first (System Admin only)
-- **/sznsearch team-reindex [team_id]** - Reindex all channels in a team (System Admin or Team Admin for their team)
-- **/sznsearch channel-reindex [channel_id]** - Reindex a specific channel (Channel Admin or channel members for DMs/GMs)
-- **/sznsearch delta-reindex <days>** - Reindex posts from the last N days across all channels (System Admin only)
+- **/sznsearch full-reindex [--fresh-index] [--files-only|--with-files]** - Reindex all data from database. Use --fresh-index to delete and recreate indices first, --files-only to reindex only file attachments, or --with-files to reindex both posts and files (System Admin only)
+- **/sznsearch team-reindex [team_id] [--files-only|--with-files]** - Reindex all channels in a team. Use --files-only to reindex only file attachments, or --with-files to reindex both posts and files (System Admin or Team Admin for their team)
+- **/sznsearch channel-reindex [channel_id] [--files-only|--with-files]** - Reindex a specific channel. Use --files-only to reindex only file attachments, or --with-files to reindex both posts and files (Channel Admin or channel members for DMs/GMs)
+- **/sznsearch delta-reindex <days> [--files-only|--with-files]** - Reindex data from the last N days across all channels. Use --files-only to reindex only file attachments, or --with-files to reindex both posts and files (System Admin only)
 - **/sznsearch user-reindex [@username]** - Reindex a specific user or all users if username is omitted (System Admin only)
 - **/sznsearch metadata-reindex** - Reindex metadata for all channels (for autocomplete) (System Admin only)
 
-**Note:** Omit team_id/channel_id to use the current team/channel.`
+**Note:** Omit team_id/channel_id to use the current team/channel.
+**File Reindexing Options:**
+- Default (no flag): Reindex only posts
+- **--files-only**: Reindex only file attachments
+- **--with-files**: Reindex both posts and file attachments`
 
 	return &model.CommandResponse{
 		Text:         help,
@@ -202,7 +262,7 @@ func (p *SznSearchCommandProvider) handleRemoveIndex(a *app.App, rctx request.CT
 	}
 }
 
-func (p *SznSearchCommandProvider) handleFullReindex(a *app.App, rctx request.CTX, args *model.CommandArgs, shouldRecreate bool) *model.CommandResponse {
+func (p *SznSearchCommandProvider) handleFullReindex(a *app.App, rctx request.CTX, args *model.CommandArgs, freshIndex bool, mode common.ReindexMode) *model.CommandResponse {
 	// Only system admins can do full reindex
 	if !a.HasPermissionTo(args.UserId, model.PermissionManageSystem) {
 		return &model.CommandResponse{
@@ -221,14 +281,15 @@ func (p *SznSearchCommandProvider) handleFullReindex(a *app.App, rctx request.CT
 
 	rctx.Logger().Info("SznSearch: User requested full reindex",
 		mlog.String("user_id", args.UserId),
-		mlog.Bool("recreate_index", shouldRecreate),
+		mlog.Bool("fresh_index", freshIndex),
+		mlog.String("mode", string(mode)),
 	)
 
 	// Start async reindexing
 	userID := args.UserId
 	go func() {
 		ctx := request.EmptyContext(rctx.Logger())
-		if err := p.engine.FullReindexFromDatabase(ctx, userID, shouldRecreate); err != nil {
+		if err := p.engine.FullReindexFromDatabase(ctx, userID, freshIndex, mode); err != nil {
 			rctx.Logger().Error("SznSearch: Full reindex failed", mlog.Err(err))
 		} else {
 			rctx.Logger().Info("SznSearch: Full reindex completed successfully")
@@ -236,8 +297,18 @@ func (p *SznSearchCommandProvider) handleFullReindex(a *app.App, rctx request.CT
 	}()
 
 	responseText := "Full reindex started in the background. Check server logs for progress."
-	if shouldRecreate {
-		responseText = "Full reindex with index recreation started in the background. The index will be deleted and recreated. Check server logs for progress."
+	if freshIndex {
+		responseText = "Full reindex with fresh indices started in the background. Indices will be deleted and recreated. Check server logs for progress."
+	}
+
+	// Add mode information to response
+	switch mode {
+	case common.ReindexModeFilesOnly:
+		responseText += " (Reindexing files only)"
+	case common.ReindexModeWithFiles:
+		responseText += " (Reindexing posts and files)"
+	default:
+		responseText += " (Reindexing posts only)"
 	}
 
 	return &model.CommandResponse{
@@ -246,7 +317,7 @@ func (p *SznSearchCommandProvider) handleFullReindex(a *app.App, rctx request.CT
 	}
 }
 
-func (p *SznSearchCommandProvider) handleTeamReindex(a *app.App, rctx request.CTX, args *model.CommandArgs, teamID string) *model.CommandResponse {
+func (p *SznSearchCommandProvider) handleTeamReindex(a *app.App, rctx request.CTX, args *model.CommandArgs, teamID string, mode common.ReindexMode) *model.CommandResponse {
 	if teamID == "" {
 		return &model.CommandResponse{
 			Text:         "Error: No team specified and no current team context.",
@@ -293,13 +364,14 @@ func (p *SznSearchCommandProvider) handleTeamReindex(a *app.App, rctx request.CT
 		mlog.String("user_id", args.UserId),
 		mlog.String("team_id", teamID),
 		mlog.String("team_name", teamDisplayName),
+		mlog.String("mode", string(mode)),
 	)
 
 	// Start async reindexing
 	userID := args.UserId
 	go func() {
 		ctx := request.EmptyContext(rctx.Logger())
-		if err := p.engine.ReindexTeam(ctx, teamID, userID); err != nil {
+		if err := p.engine.ReindexTeam(ctx, teamID, userID, mode); err != nil {
 			rctx.Logger().Error("SznSearch: Team reindex failed",
 				mlog.String("team_id", teamID),
 				mlog.Err(err),
@@ -311,13 +383,25 @@ func (p *SznSearchCommandProvider) handleTeamReindex(a *app.App, rctx request.CT
 		}
 	}()
 
+	responseText := fmt.Sprintf("Reindexing team **%s** in the background. Check server logs for progress.", teamDisplayName)
+
+	// Add mode information to response
+	switch mode {
+	case common.ReindexModeFilesOnly:
+		responseText += " (Reindexing files only)"
+	case common.ReindexModeWithFiles:
+		responseText += " (Reindexing posts and files)"
+	default:
+		responseText += " (Reindexing posts only)"
+	}
+
 	return &model.CommandResponse{
-		Text:         fmt.Sprintf("Reindexing team **%s** in the background. Check server logs for progress.", teamDisplayName),
+		Text:         responseText,
 		ResponseType: model.CommandResponseTypeEphemeral,
 	}
 }
 
-func (p *SznSearchCommandProvider) handleChannelReindex(a *app.App, rctx request.CTX, args *model.CommandArgs, channelID string) *model.CommandResponse {
+func (p *SznSearchCommandProvider) handleChannelReindex(a *app.App, rctx request.CTX, args *model.CommandArgs, channelID string, mode common.ReindexMode) *model.CommandResponse {
 	if channelID == "" {
 		return &model.CommandResponse{
 			Text:         "Error: No channel specified and no current channel context.",
@@ -375,13 +459,14 @@ func (p *SznSearchCommandProvider) handleChannelReindex(a *app.App, rctx request
 		mlog.String("user_id", args.UserId),
 		mlog.String("channel_id", channelID),
 		mlog.String("channel_type", string(channel.Type)),
+		mlog.String("mode", string(mode)),
 	)
 
 	// Start async reindexing
 	userID := args.UserId
 	go func() {
 		ctx := request.EmptyContext(rctx.Logger())
-		if err := p.engine.ReindexChannel(ctx, channelID, userID); err != nil {
+		if err := p.engine.ReindexChannel(ctx, channelID, userID, mode); err != nil {
 			rctx.Logger().Error("SznSearch: Channel reindex failed",
 				mlog.String("channel_id", channelID),
 				mlog.Err(err),
@@ -398,13 +483,25 @@ func (p *SznSearchCommandProvider) handleChannelReindex(a *app.App, rctx request
 		channelName = channel.Name
 	}
 
+	responseText := fmt.Sprintf("Reindexing channel **%s** in the background. Check server logs for progress.", channelName)
+
+	// Add mode information to response
+	switch mode {
+	case common.ReindexModeFilesOnly:
+		responseText += " (Reindexing files only)"
+	case common.ReindexModeWithFiles:
+		responseText += " (Reindexing posts and files)"
+	default:
+		responseText += " (Reindexing posts only)"
+	}
+
 	return &model.CommandResponse{
-		Text:         fmt.Sprintf("Reindexing channel **%s** in the background. Check server logs for progress.", channelName),
+		Text:         responseText,
 		ResponseType: model.CommandResponseTypeEphemeral,
 	}
 }
 
-func (p *SznSearchCommandProvider) handleDeltaReindex(a *app.App, rctx request.CTX, args *model.CommandArgs, daysStr string) *model.CommandResponse {
+func (p *SznSearchCommandProvider) handleDeltaReindex(a *app.App, rctx request.CTX, args *model.CommandArgs, daysStr string, mode common.ReindexMode) *model.CommandResponse {
 	// Only system admins can do delta reindex
 	if !a.HasPermissionTo(args.UserId, model.PermissionManageSystem) {
 		return &model.CommandResponse{
@@ -436,13 +533,14 @@ func (p *SznSearchCommandProvider) handleDeltaReindex(a *app.App, rctx request.C
 	rctx.Logger().Info("SznSearch: User requested delta reindex",
 		mlog.String("user_id", args.UserId),
 		mlog.Int("days", daysInt),
+		mlog.String("mode", string(mode)),
 	)
 
 	// Start async reindexing
 	userID := args.UserId
 	go func() {
 		ctx := request.EmptyContext(rctx.Logger())
-		if err := p.engine.DeltaReindexFromDatabase(ctx, userID, daysInt); err != nil {
+		if err := p.engine.DeltaReindexFromDatabase(ctx, userID, daysInt, mode); err != nil {
 			rctx.Logger().Error("SznSearch: Delta reindex failed",
 				mlog.Int("days", daysInt),
 				mlog.Err(err),
@@ -454,8 +552,20 @@ func (p *SznSearchCommandProvider) handleDeltaReindex(a *app.App, rctx request.C
 		}
 	}()
 
+	responseText := fmt.Sprintf("Delta reindex started for data from the last **%d days** in the background. Check server logs for progress.", daysInt)
+
+	// Add mode information to response
+	switch mode {
+	case common.ReindexModeFilesOnly:
+		responseText += " (Reindexing files only)"
+	case common.ReindexModeWithFiles:
+		responseText += " (Reindexing posts and files)"
+	default:
+		responseText += " (Reindexing posts only)"
+	}
+
 	return &model.CommandResponse{
-		Text:         fmt.Sprintf("Delta reindex started for posts from the last **%d days** in the background. Check server logs for progress.", daysInt),
+		Text:         responseText,
 		ResponseType: model.CommandResponseTypeEphemeral,
 	}
 }
