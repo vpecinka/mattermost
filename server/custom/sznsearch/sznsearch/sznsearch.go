@@ -260,7 +260,9 @@ func (s *SznSearchImpl) createClient() (*elasticsearch.Client, error) {
 			ResponseHeaderTimeout: timeout,
 			DisableKeepAlives:     false,
 			MaxConnsPerHost:       maxConns,
+			MaxIdleConns:          maxConns,         // Allow more total idle connections
 			MaxIdleConnsPerHost:   maxIdleConns,
+			IdleConnTimeout:       90 * time.Second, // Keep connections alive for reuse
 		}
 
 		// Set up the Elasticsearch client with the custom transport
@@ -279,7 +281,9 @@ func (s *SznSearchImpl) createClient() (*elasticsearch.Client, error) {
 			ResponseHeaderTimeout: timeout,
 			DisableKeepAlives:     false,
 			MaxConnsPerHost:       maxConns,
+			MaxIdleConns:          maxConns,         // Allow more total idle connections
 			MaxIdleConnsPerHost:   maxIdleConns,
+			IdleConnTimeout:       90 * time.Second, // Keep connections alive for reuse
 		}
 
 		config = elasticsearch.Config{

@@ -466,37 +466,26 @@ func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID strin
 			totalPosts += len(postBatch)
 		}
 
-		// Index files
+		// Index files in batch
 		if len(fileIDs) > 0 {
-			files, fileErr := s.Platform.Store.FileInfo().GetByIds(fileIDs, true, true)
+			files, fileErr := s.Platform.Store.FileInfo().GetByIds(fileIDs, false, true)
 			if fileErr != nil {
 				rctx.Logger().Error("SznSearch: Failed to get files by IDs during reindex",
 					mlog.String("channel_id", channelID),
 					mlog.Err(fileErr),
 				)
 				// Continue with post indexing even if file fetch fails
-			} else {
-				// Index each file
-				for _, file := range files {
-					// Check circuit breaker
-					if !s.circuitBreaker.AllowRequest() {
-						rctx.Logger().Warn("SznSearch: Circuit breaker open, stopping file reindex",
-							mlog.String("channel_id", channelID),
-						)
-						return model.NewAppError("SznSearch.reindexChannelInternal", "sznsearch.circuit_breaker_open", nil, "Circuit breaker is open", 500)
-					}
-
-					if indexErr := s.IndexFile(file, channelID); indexErr != nil {
-						rctx.Logger().Error("SznSearch: Failed to index file during reindex",
-							mlog.String("file_id", file.Id),
-							mlog.String("channel_id", channelID),
-							mlog.Err(indexErr),
-						)
-						// Continue with other files - error is logged but doesn't increment counter
-					} else {
-						// Only increment counter on successful indexation
-						totalFiles++
-					}
+			} else if len(files) > 0 {
+				// Index files in batch using bulk API
+				if indexErr := s.indexFilesBatch(files, channelID); indexErr != nil {
+					rctx.Logger().Error("SznSearch: Failed to index file batch during reindex",
+						mlog.String("channel_id", channelID),
+						mlog.Int("batch_size", len(files)),
+						mlog.Err(indexErr),
+					)
+					// Don't return error - continue with other batches
+				} else {
+					totalFiles += len(files)
 				}
 			}
 		}
