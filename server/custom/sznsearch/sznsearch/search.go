@@ -521,7 +521,7 @@ func (s *SznSearchImpl) SearchChannels(teamId, userID string, term string, isGue
 	var result struct {
 		Hits struct {
 			Hits []struct {
-				Source common.ESChannel `json:"_source"`
+				ID string `json:"_id"`
 			} `json:"hits"`
 		} `json:"hits"`
 	}
@@ -531,6 +531,7 @@ func (s *SznSearchImpl) SearchChannels(teamId, userID string, term string, isGue
 		res, searchErr := s.client.Search(
 			s.client.Search.WithIndex(common.ChannelIndex),
 			s.client.Search.WithBody(bufCopy),
+			s.client.Search.WithSource("false"),
 		)
 		if searchErr != nil {
 			return searchErr
@@ -575,11 +576,10 @@ func (s *SznSearchImpl) SearchChannels(teamId, userID string, term string, isGue
 	}
 
 	s.circuitBreaker.RecordSuccess()
-
 	// Extract channel IDs
 	channelIds := make([]string, 0, len(result.Hits.Hits))
 	for _, hit := range result.Hits.Hits {
-		channelIds = append(channelIds, hit.Source.Id)
+		channelIds = append(channelIds, hit.ID)
 	}
 
 	s.Platform.Log().Debug("SznSearch: Channel search completed",
@@ -706,26 +706,15 @@ func (s *SznSearchImpl) SearchUsersInChannel(teamId, channelId string, restricte
 	}
 
 	// Search for users in the channel
-	uchan, err := s.autocompleteUsersInChannel(channelId, term, options)
+	uchanIds, err := s.autocompleteUsersInChannel(channelId, term, options)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// Search for users not in the channel (but in the team)
-	var nuchan []common.ESUser
-	nuchan, err = s.autocompleteUsersNotInChannel(teamId, channelId, restrictedToChannels, term, options)
+	nuchanIds, err := s.autocompleteUsersNotInChannel(teamId, channelId, restrictedToChannels, term, options)
 	if err != nil {
 		return nil, nil, err
-	}
-
-	// Extract user IDs
-	uchanIds := make([]string, 0, len(uchan))
-	for _, user := range uchan {
-		uchanIds = append(uchanIds, user.Id)
-	}
-	nuchanIds := make([]string, 0, len(nuchan))
-	for _, user := range nuchan {
-		nuchanIds = append(nuchanIds, user.Id)
 	}
 
 	return uchanIds, nuchanIds, nil
@@ -737,26 +726,20 @@ func (s *SznSearchImpl) SearchUsersInTeam(teamId string, restrictedToChannels []
 		return []string{}, nil
 	}
 
-	var users []common.ESUser
+	var usersIds []string
 	var err *model.AppError
 	if restrictedToChannels == nil {
-		users, err = s.autocompleteUsersInTeam(teamId, term, options)
+		usersIds, err = s.autocompleteUsersInTeam(teamId, term, options)
 	} else {
-		users, err = s.autocompleteUsersInChannels(restrictedToChannels, term, options)
+		usersIds, err = s.autocompleteUsersInChannels(restrictedToChannels, term, options)
 	}
 	if err != nil {
 		return nil, err
 	}
 
 	// Limit results
-	if len(users) >= options.Limit {
-		users = users[:options.Limit]
-	}
-
-	// Extract user IDs
-	usersIds := make([]string, 0, len(users))
-	for _, user := range users {
-		usersIds = append(usersIds, user.Id)
+	if len(usersIds) >= options.Limit {
+		usersIds = usersIds[:options.Limit]
 	}
 
 	return usersIds, nil
@@ -764,18 +747,17 @@ func (s *SznSearchImpl) SearchUsersInTeam(teamId string, restrictedToChannels []
 
 // executeUserSearch executes an ElasticSearch query and returns user results
 // This is a helper function to reduce code duplication in autocomplete methods
-func (s *SznSearchImpl) executeUserSearch(searchRequest map[string]any, contextName string) ([]common.ESUser, *model.AppError) {
+func (s *SznSearchImpl) executeUserSearch(searchRequest map[string]any, contextName string) ([]string, *model.AppError) {
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(searchRequest); err != nil {
 		s.Platform.Log().Error("SznSearch: Failed to encode user search query", mlog.Err(err))
 		return nil, model.NewAppError("SznSearch."+contextName, "sznsearch."+contextName+".encode", nil, err.Error(), http.StatusInternalServerError)
 	}
-
 	// Execute search with retry
 	var result struct {
 		Hits struct {
 			Hits []struct {
-				Source common.ESUser `json:"_source"`
+				ID string `json:"_id"`
 			} `json:"hits"`
 		} `json:"hits"`
 	}
@@ -785,6 +767,7 @@ func (s *SznSearchImpl) executeUserSearch(searchRequest map[string]any, contextN
 		res, searchErr := s.client.Search(
 			s.client.Search.WithIndex(common.UserIndex),
 			s.client.Search.WithBody(bufCopy),
+			s.client.Search.WithSource("false"),
 		)
 		if searchErr != nil {
 			return searchErr
@@ -826,16 +809,15 @@ func (s *SznSearchImpl) executeUserSearch(searchRequest map[string]any, contextN
 	s.circuitBreaker.RecordSuccess()
 
 	// Extract users from results
-	users := make([]common.ESUser, 0, len(result.Hits.Hits))
+	users := make([]string, 0, len(result.Hits.Hits))
 	for _, hit := range result.Hits.Hits {
-		users = append(users, hit.Source)
+		users = append(users, hit.ID)
 	}
-
 	return users, nil
 }
 
 // autocompleteUsers is a generic autocomplete function for users
-func (s *SznSearchImpl) autocompleteUsers(contextCategory string, categoryIds []string, term string, options *model.UserSearchOptions) ([]common.ESUser, *model.AppError) {
+func (s *SznSearchImpl) autocompleteUsers(contextCategory string, categoryIds []string, term string, options *model.UserSearchOptions) ([]string, *model.AppError) {
 	if !s.IsAutocompletionEnabled() {
 		return nil, model.NewAppError("SznSearch.autocompleteUsers", "sznsearch.autocomplete_users.disabled", nil, "", http.StatusInternalServerError)
 	}
@@ -944,22 +926,22 @@ func (s *SznSearchImpl) autocompleteUsers(contextCategory string, categoryIds []
 }
 
 // autocompleteUsersInChannel searches for users in a specific channel
-func (s *SznSearchImpl) autocompleteUsersInChannel(channelId, term string, options *model.UserSearchOptions) ([]common.ESUser, *model.AppError) {
+func (s *SznSearchImpl) autocompleteUsersInChannel(channelId, term string, options *model.UserSearchOptions) ([]string, *model.AppError) {
 	return s.autocompleteUsers("channel_id", []string{channelId}, term, options)
 }
 
 // autocompleteUsersInChannels searches for users in multiple channels
-func (s *SznSearchImpl) autocompleteUsersInChannels(channelIds []string, term string, options *model.UserSearchOptions) ([]common.ESUser, *model.AppError) {
+func (s *SznSearchImpl) autocompleteUsersInChannels(channelIds []string, term string, options *model.UserSearchOptions) ([]string, *model.AppError) {
 	return s.autocompleteUsers("channel_id", channelIds, term, options)
 }
 
 // autocompleteUsersInTeam searches for users in a team
-func (s *SznSearchImpl) autocompleteUsersInTeam(teamId, term string, options *model.UserSearchOptions) ([]common.ESUser, *model.AppError) {
+func (s *SznSearchImpl) autocompleteUsersInTeam(teamId, term string, options *model.UserSearchOptions) ([]string, *model.AppError) {
 	return s.autocompleteUsers("team_id", []string{teamId}, term, options)
 }
 
 // autocompleteUsersNotInChannel searches for users in a team but not in a specific channel
-func (s *SznSearchImpl) autocompleteUsersNotInChannel(teamId, channelId string, restrictedToChannels []string, term string, options *model.UserSearchOptions) ([]common.ESUser, *model.AppError) {
+func (s *SznSearchImpl) autocompleteUsersNotInChannel(teamId, channelId string, restrictedToChannels []string, term string, options *model.UserSearchOptions) ([]string, *model.AppError) {
 	if !s.IsAutocompletionEnabled() {
 		return nil, model.NewAppError("SznSearch.autocompleteUsersNotInChannel", "sznsearch.autocomplete_users_not_in_channel.disabled", nil, "", http.StatusInternalServerError)
 	}
@@ -1076,6 +1058,291 @@ func (s *SznSearchImpl) autocompleteUsersNotInChannel(teamId, channelId string, 
 
 // SearchFiles searches for files (not implemented yet)
 func (s *SznSearchImpl) SearchFiles(channels model.ChannelList, searchParams []*model.SearchParams, page, perPage int) ([]string, *model.AppError) {
-	// Not implemented for now
-	return []string{}, nil
+	if !s.IsSearchEnabled() {
+		s.Platform.Log().Warn("SznSearch.SearchFiles: search not enabled, returning error")
+		return []string{}, model.NewAppError("SznSearch.SearchFiles", "sznsearch.search_files.disabled", nil, "", http.StatusInternalServerError)
+	}
+
+	if !s.isBackendHealthy() {
+		s.Platform.Log().Warn("SznSearch.SearchFiles: ES backend unhealthy, returning error")
+		return []string{}, model.NewAppError("SznSearch.SearchFiles", "sznsearch.search_files.backend_unhealthy", nil, "", http.StatusServiceUnavailable)
+	}
+
+	// Extract channel IDs
+	var channelIds []string
+	for _, channel := range channels {
+		channelIds = append(channelIds, channel.Id)
+	}
+
+	// Build ElasticSearch query for files
+	esQuery := s.buildFileSearchQuery(searchParams, channelIds, page, perPage)
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(esQuery); err != nil {
+		s.Platform.Log().Error("SznSearch: Failed to encode file search query", mlog.Err(err))
+		return nil, model.NewAppError("SznSearch.SearchFiles", "sznsearch.search_files.encode", nil, err.Error(), http.StatusInternalServerError)
+	}
+
+	s.Platform.Log().Debug("SznSearch: Executing file search query", mlog.String("query", buf.String()))
+
+	// Execute search with retry + backoff
+	var result struct {
+		Hits struct {
+			Hits []struct {
+				ID    string  `json:"_id"`
+				Score float64 `json:"_score"`
+			} `json:"hits"`
+		} `json:"hits"`
+	}
+
+	err := common.RetryWithBackoff(3, 500*time.Millisecond, 5*time.Second, s.Platform.Log(), func() error {
+		bufCopy := bytes.NewBuffer(buf.Bytes())
+		res, searchErr := s.client.Search(
+			s.client.Search.WithIndex(common.FileIndex),
+			s.client.Search.WithBody(bufCopy),
+			s.client.Search.WithTrackTotalHits(true),
+			s.client.Search.WithSource("false"),
+		)
+		if searchErr != nil {
+			return searchErr
+		}
+		defer res.Body.Close()
+
+		if res.IsError() {
+			// 4xx errors are client errors - don't retry
+			if res.StatusCode >= 400 && res.StatusCode < 500 {
+				return &common.NonRetryableError{
+					Err: model.NewAppError("SearchFiles", "es_client_error", nil, res.String(), res.StatusCode),
+				}
+			}
+			// 5xx errors are server errors - retry
+			if res.StatusCode >= 500 {
+				return model.NewAppError("SearchFiles", "es_error", nil, res.String(), res.StatusCode)
+			}
+		}
+
+		// Parse response
+		if parseErr := json.NewDecoder(res.Body).Decode(&result); parseErr != nil {
+			return parseErr
+		}
+		return nil
+	})
+
+	if err != nil {
+		s.Platform.Log().Error("SznSearch: File search request failed", mlog.Err(err))
+		// Record circuit breaker failure for server/network errors
+		var appErr *model.AppError
+		if errors.As(err, &appErr) && appErr.StatusCode >= 500 {
+			s.circuitBreaker.RecordFailure()
+		} else if !errors.As(err, &appErr) {
+			s.circuitBreaker.RecordFailure()
+		}
+		return nil, model.NewAppError("SznSearch.SearchFiles", "sznsearch.search_files.error", nil, err.Error(), http.StatusInternalServerError)
+	}
+
+	s.circuitBreaker.RecordSuccess()
+
+	// Extract file IDs
+	fileIds := make([]string, 0, len(result.Hits.Hits))
+	for _, hit := range result.Hits.Hits {
+		fileIds = append(fileIds, hit.ID)
+	}
+
+	s.Platform.Log().Debug("SznSearch: File search completed",
+		mlog.Int("results_count", len(fileIds)),
+	)
+
+	return fileIds, nil
+}
+
+// buildFileSearchQuery builds an ElasticSearch query for file search
+func (s *SznSearchImpl) buildFileSearchQuery(searchParams []*model.SearchParams, channelIds []string, page, perPage int) map[string]any {
+	var mustQueries []map[string]any
+	var filterQueries []map[string]any
+	var mustNotQueries []map[string]any
+
+	// Process search params
+	for i, params := range searchParams {
+		// Terms search in Name and Content fields
+		if params.Terms != "" {
+			operator := "and"
+			if params.OrTerms {
+				operator = "or"
+			}
+
+			shouldQueries := []map[string]any{
+				{
+					"simple_query_string": map[string]any{
+						"query":            params.Terms,
+						"fields":           []string{"Name", "Content"},
+						"default_operator": operator,
+					},
+				},
+			}
+
+			if params.OrTerms {
+				mustQueries = append(mustQueries, map[string]any{
+					"bool": map[string]any{"should": shouldQueries},
+				})
+			} else {
+				mustQueries = append(mustQueries, map[string]any{
+					"bool": map[string]any{"must": shouldQueries},
+				})
+			}
+		}
+
+		// Excluded terms
+		if params.ExcludedTerms != "" {
+			operator := "and"
+			if params.OrTerms {
+				operator = "or"
+			}
+
+			shouldQueries := []map[string]any{
+				{
+					"simple_query_string": map[string]any{
+						"query":            params.ExcludedTerms,
+						"fields":           []string{"Name", "Content"},
+						"default_operator": operator,
+					},
+				},
+			}
+			mustNotQueries = append(mustNotQueries, map[string]any{
+				"bool": map[string]any{"should": shouldQueries},
+			})
+		}
+
+		// Process filters only once (i == 0)
+		if i == 0 {
+			// Channels filter
+			if len(params.InChannels) > 0 {
+				filterQueries = append(filterQueries, map[string]any{
+					"terms": map[string]any{"ChannelId": params.InChannels},
+				})
+			}
+			if len(params.ExcludedChannels) > 0 {
+				mustNotQueries = append(mustNotQueries, map[string]any{
+					"terms": map[string]any{"ChannelId": params.ExcludedChannels},
+				})
+			}
+
+			// Users filter
+			if len(params.FromUsers) > 0 {
+				filterQueries = append(filterQueries, map[string]any{
+					"terms": map[string]any{"CreatorId": params.FromUsers},
+				})
+			}
+			if len(params.ExcludedUsers) > 0 {
+				mustNotQueries = append(mustNotQueries, map[string]any{
+					"terms": map[string]any{"CreatorId": params.ExcludedUsers},
+				})
+			}
+
+			// Extensions filter (file type)
+			if len(params.Extensions) > 0 {
+				filterQueries = append(filterQueries, map[string]any{
+					"terms": map[string]any{"Extension": params.Extensions},
+				})
+			}
+			if len(params.ExcludedExtensions) > 0 {
+				mustNotQueries = append(mustNotQueries, map[string]any{
+					"terms": map[string]any{"Extension": params.ExcludedExtensions},
+				})
+			}
+
+			// Date filters
+			if params.OnDate != "" {
+				before, after := params.GetOnDateMillis()
+				filterQueries = append(filterQueries, map[string]any{
+					"range": map[string]any{
+						"CreateAt": map[string]any{
+							"gte": before,
+							"lte": after,
+						},
+					},
+				})
+			} else {
+				if params.AfterDate != "" {
+					filterQueries = append(filterQueries, map[string]any{
+						"range": map[string]any{
+							"CreateAt": map[string]any{
+								"gte": params.GetAfterDateMillis(),
+							},
+						},
+					})
+				}
+				if params.BeforeDate != "" {
+					filterQueries = append(filterQueries, map[string]any{
+						"range": map[string]any{
+							"CreateAt": map[string]any{
+								"lte": params.GetBeforeDateMillis(),
+							},
+						},
+					})
+				}
+			}
+
+			// Excluded date filters
+			if params.ExcludedDate != "" {
+				before, after := params.GetExcludedDateMillis()
+				mustNotQueries = append(mustNotQueries, map[string]any{
+					"range": map[string]any{
+						"CreateAt": map[string]any{
+							"gte": before,
+							"lte": after,
+						},
+					},
+				})
+			} else {
+				if params.ExcludedAfterDate != "" {
+					mustNotQueries = append(mustNotQueries, map[string]any{
+						"range": map[string]any{
+							"CreateAt": map[string]any{
+								"gte": params.GetExcludedAfterDateMillis(),
+							},
+						},
+					})
+				}
+				if params.ExcludedBeforeDate != "" {
+					mustNotQueries = append(mustNotQueries, map[string]any{
+						"range": map[string]any{
+							"CreateAt": map[string]any{
+								"lte": params.GetExcludedBeforeDateMillis(),
+							},
+						},
+					})
+				}
+			}
+		}
+	}
+
+	// Add channel restriction (user can only search in channels they have access to)
+	filterQueries = append(filterQueries, map[string]any{
+		"terms": map[string]any{"ChannelId": channelIds},
+	})
+
+	// Build final bool query
+	boolQuery := map[string]any{
+		"filter": filterQueries,
+	}
+
+	if len(mustQueries) > 0 {
+		boolQuery["must"] = mustQueries
+	}
+
+	if len(mustNotQueries) > 0 {
+		boolQuery["must_not"] = mustNotQueries
+	}
+
+	// Build complete query with sorting and pagination
+	return map[string]any{
+		"query": map[string]any{
+			"bool": boolQuery,
+		},
+		"sort": []map[string]any{
+			{"CreateAt": map[string]any{"order": "desc"}},
+		},
+		"from": page * perPage,
+		"size": perPage,
+	}
 }

@@ -11,6 +11,9 @@ const (
 
 	MessageIndexType = MessageIndexHunspell
 	MessageIndex     = "messages"
+	UserIndex        = "users"
+	ChannelIndex     = "channels"
+	FileIndex        = "files"
 
 	// Special markers
 	NoTeamID = "@private"
@@ -43,6 +46,18 @@ type FoundIndexedMessage struct {
 	Message   IndexedMessage      `json:"_source"`
 	Score     float64             `json:"_score"`
 	Highlight map[string][]string `json:"highlight"`
+}
+
+// IndexedFile represents a file document in ElasticSearch
+type IndexedFile struct {
+	ID        string `json:"Id"`
+	Name      string `json:"Name"`      // Original name + split variations for better search
+	Content   string `json:"Content"`   // Extracted text content from document
+	Extension string `json:"Extension"` // e.g., "pdf", "docx", "txt"
+	CreatorId string `json:"CreatorId"`
+	ChannelId string `json:"ChannelId"`
+	PostId    string `json:"PostId"`
+	CreateAt  int64  `json:"CreateAt"`
 }
 
 // ChannelIndexingJob represents a channel indexing task for worker pool
@@ -89,6 +104,15 @@ const (
 	ReindexTypeTeam    ReindexType = "team"
 	ReindexTypeChannel ReindexType = "channel"
 	ReindexTypeDelta   ReindexType = "delta"
+)
+
+// ReindexMode represents what should be reindexed (posts, files, or both)
+type ReindexMode string
+
+const (
+	ReindexModePostsOnly ReindexMode = "posts_only" // Default: reindex only posts
+	ReindexModeFilesOnly ReindexMode = "files_only" // Reindex only files
+	ReindexModeWithFiles ReindexMode = "with_files" // Reindex both posts and files
 )
 
 // ReindexInfo tracks information about a running reindex operation
