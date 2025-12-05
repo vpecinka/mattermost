@@ -380,7 +380,7 @@ func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID strin
 	totalPosts := 0
 	totalFiles := 0
 	offset := 0
-	const maxPerPage = 1000 // Mattermost API limit for GetPosts
+	const maxPerPage = 500 // Reduced from 1000 to lower memory pressure during parallel reindexing
 
 	// Single unified loop through posts - index posts and/or files based on mode
 	for {
@@ -500,6 +500,10 @@ func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID strin
 		if len(postList.Posts) < maxPerPage {
 			break // Last page - DB returned fewer posts than requested
 		}
+
+		// Small delay between queries to allow PostgreSQL to release shared memory
+		// This is especially important when running parallel reindexing with many workers
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	rctx.Logger().Debug("SznSearch: Channel reindex completed",
