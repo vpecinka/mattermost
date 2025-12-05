@@ -125,7 +125,7 @@ func (s *SznSearchImpl) indexMessageBatch(messages []common.IndexedMessage) *mod
 	var buf bytes.Buffer
 
 	for _, msg := range messages {
-		// Index operation
+		// Index operation (metadata for bulk API)
 		meta := map[string]any{
 			"index": map[string]any{
 				"_index": common.MessageIndex,
@@ -140,19 +140,8 @@ func (s *SznSearchImpl) indexMessageBatch(messages []common.IndexedMessage) *mod
 			return model.NewAppError("SznSearch.indexMessageBatch", "sznsearch.indexer.encode_meta", nil, err.Error(), 500)
 		}
 
-		// Document
-		doc := map[string]any{
-			"Message":     msg.Message,
-			"Payload":     msg.Payload,
-			"Hashtags":    msg.Hashtags,
-			"CreatedAt":   msg.CreatedAt,
-			"ChannelId":   msg.ChannelID,
-			"ChannelType": msg.ChannelType,
-			"TeamId":      msg.TeamID,
-			"UserId":      msg.UserID,
-			"Members":     msg.Members,
-		}
-		if err := json.NewEncoder(&buf).Encode(doc); err != nil {
+		// Document - use structure directly (JSON tags handle field names)
+		if err := json.NewEncoder(&buf).Encode(msg); err != nil {
 			s.Platform.Log().Error("SznSearch: Failed to encode bulk document",
 				mlog.String("post_id", msg.ID),
 				mlog.Err(err),
@@ -202,6 +191,96 @@ func (s *SznSearchImpl) indexMessageBatch(messages []common.IndexedMessage) *mod
 			s.circuitBreaker.RecordFailure()
 		}
 		return model.NewAppError("SznSearch.indexMessageBatch", "sznsearch.indexer.bulk_error", nil, err.Error(), 500)
+	}
+
+	// Success
+	s.circuitBreaker.RecordSuccess()
+	return nil
+}
+
+// indexFilesBatch indexes multiple files using Elasticsearch bulk API
+func (s *SznSearchImpl) indexFilesBatch(files []*model.FileInfo, channelID string) *model.AppError {
+	if len(files) == 0 {
+		return nil
+	}
+
+	// Check circuit breaker first
+	if !s.circuitBreaker.AllowRequest() {
+		s.Platform.Log().Warn("SznSearch: Circuit breaker open, skipping file batch indexing",
+			mlog.Int("batch_size", len(files)))
+		return model.NewAppError("SznSearch.indexFilesBatch", "sznsearch.circuit_breaker_open", nil, "Circuit breaker is open", 503)
+	}
+
+	s.Platform.Log().Debug("SznSearch: Building file bulk request", mlog.Int("num_files", len(files)))
+
+	// Build bulk request body (newline-delimited JSON)
+	var buf bytes.Buffer
+
+	for _, file := range files {
+		// Convert to ES document
+		searchFile := common.ESFileFromFileInfo(file, channelID)
+
+		// Index operation (metadata for bulk API)
+		meta := map[string]any{
+			"index": map[string]any{
+				"_index": common.FileIndex,
+				"_id":    searchFile.ID,
+			},
+		}
+		if err := json.NewEncoder(&buf).Encode(meta); err != nil {
+			s.Platform.Log().Error("SznSearch: Failed to encode file bulk meta",
+				mlog.String("file_id", file.Id),
+				mlog.Err(err),
+			)
+			return model.NewAppError("SznSearch.indexFilesBatch", "sznsearch.indexer.encode_meta", nil, err.Error(), 500)
+		}
+
+		// Document - use structure directly (JSON tags handle field names)
+		if err := json.NewEncoder(&buf).Encode(searchFile); err != nil {
+			s.Platform.Log().Error("SznSearch: Failed to encode file bulk document",
+				mlog.String("file_id", file.Id),
+				mlog.Err(err),
+			)
+			return model.NewAppError("SznSearch.indexFilesBatch", "sznsearch.indexer.encode_doc", nil, err.Error(), 500)
+		}
+	}
+
+	// Execute bulk request with retry + backoff
+	err := common.RetryWithBackoff(3, 500*time.Millisecond, 5*time.Second, s.Platform.Log(), func() error {
+		bufCopy := bytes.NewBuffer(buf.Bytes()) // Create copy for retry
+		res, bulkErr := s.client.Bulk(bufCopy, s.client.Bulk.WithContext(context.Background()))
+		if bulkErr != nil {
+			return bulkErr
+		}
+		defer res.Body.Close()
+
+		// Check for HTTP errors inside retry loop
+		if res.IsError() {
+			// 4xx errors are client errors - don't retry
+			if res.StatusCode >= 400 && res.StatusCode < 500 {
+				return &common.NonRetryableError{
+					Err: model.NewAppError("indexFilesBatch", "es_client_error", nil, res.String(), res.StatusCode),
+				}
+			}
+			// 5xx errors are server errors - retry
+			if res.StatusCode >= 500 {
+				return model.NewAppError("indexFilesBatch", "es_server_error", nil, res.String(), res.StatusCode)
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		s.Platform.Log().Error("SznSearch: File bulk request failed", mlog.Err(err))
+		// Record circuit breaker failure for server errors and network errors
+		var appErr *model.AppError
+		if errors.As(err, &appErr) && appErr.StatusCode >= 500 {
+			s.circuitBreaker.RecordFailure()
+		} else if !errors.As(err, &appErr) {
+			s.circuitBreaker.RecordFailure()
+		}
+		return model.NewAppError("SznSearch.indexFilesBatch", "sznsearch.indexer.file_bulk_error", nil, err.Error(), 500)
 	}
 
 	// Success
