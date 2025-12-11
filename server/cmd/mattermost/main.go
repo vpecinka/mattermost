@@ -15,6 +15,9 @@ import (
 	// Enterprise Imports
 	_ "github.com/mattermost/mattermost/server/v8/enterprise"
 
+	// Custom SznCluster - Provides cluster support without enterprise
+	_ "github.com/mattermost/mattermost/server/v8/custom/szncluster"
+
 	// Custom SznSearch Engine - MUST be after enterprise to override elasticsearch
 	_ "github.com/mattermost/mattermost/server/v8/custom/sznsearch/sznsearch"
 )
