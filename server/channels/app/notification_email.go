@@ -101,7 +101,7 @@ func (a *App) buildEmailNotification(
 
 		// Ensure attachments are shown even if message is empty
 		if messageHTML == "" && len(post.Attachments()) > 0 {
-			messageHTML = " " // non-empty string to trigger attachment processing
+			messageHTML = "<p>&nbsp;</p>" // minimal valid HTML to trigger attachment processing
 		}
 	}
 
