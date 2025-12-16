@@ -1629,7 +1629,7 @@ const AdminDefinition: AdminDefinitionType = {
                     // NOTE: Custom cluster implementation (szncluster) doesn't require enterprise license
                     // it.not(it.licensedForFeature('Cluster')),
                     it.configIsTrue('ExperimentalSettings', 'RestrictSystemAdmin'),
-                    it.not(it.userHasReadPermissionOnResource(RESOURCE_KEYS.ENVIRONMENT.HIGH_AVAILABILITY)),
+                    // it.not(it.userHasReadPermissionOnResource(RESOURCE_KEYS.ENVIRONMENT.HIGH_AVAILABILITY)),
                 ),
                 searchableStrings: clusterSearchableStrings,
                 isDisabled: it.not(it.userHasWritePermissionOnResource(RESOURCE_KEYS.ENVIRONMENT.HIGH_AVAILABILITY)),
@@ -1645,7 +1645,7 @@ const AdminDefinition: AdminDefinitionType = {
                     // NOTE: Custom cluster implementation (szncluster) doesn't require enterprise license
                     // it.not(it.licensedForFeature('Cluster')),
                     it.configIsTrue('ExperimentalSettings', 'RestrictSystemAdmin'),
-                    it.not(it.userHasReadPermissionOnResource(RESOURCE_KEYS.ENVIRONMENT.HIGH_AVAILABILITY)),
+                    // it.not(it.userHasReadPermissionOnResource(RESOURCE_KEYS.ENVIRONMENT.HIGH_AVAILABILITY)),
                 ),
                 searchableStrings: [
                     adminDefinitionMessages.cache_settings_title,
