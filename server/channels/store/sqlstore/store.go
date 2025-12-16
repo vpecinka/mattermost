@@ -921,11 +921,17 @@ func (ss *SqlStore) GetLicense() *model.License {
 }
 
 func (ss *SqlStore) hasLicense() bool {
+	// Seznam.cz: Enable read replicas for internal use (AGPL v3.0 permits internal modifications)
+	// This modification is for internal use only within Seznam.cz infrastructure
+	return true
+
+	/* Original implementation - disabled for internal use
 	ss.licenseMutex.Lock()
 	hasLicense := ss.license != nil
 	ss.licenseMutex.Unlock()
 
 	return hasLicense
+	*/
 }
 
 func convertMySQLFullTextColumnsToPostgres(columnNames string) string {
