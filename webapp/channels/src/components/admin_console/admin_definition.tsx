@@ -1782,7 +1782,8 @@ const AdminDefinition: AdminDefinitionType = {
                 url: 'environment/high_availability',
                 title: defineMessage({id: 'admin.sidebar.highAvailability', defaultMessage: 'High Availability'}),
                 isHidden: it.any(
-                    it.not(it.licensedForFeature('Cluster')),
+                    // NOTE: Custom cluster implementation (szncluster) doesn't require enterprise license
+                    // it.not(it.licensedForFeature('Cluster')),
                     it.configIsTrue('ExperimentalSettings', 'RestrictSystemAdmin'),
                     it.not(it.userHasReadPermissionOnResource(RESOURCE_KEYS.ENVIRONMENT.HIGH_AVAILABILITY)),
                 ),
@@ -1797,7 +1798,8 @@ const AdminDefinition: AdminDefinitionType = {
                 url: 'environment/cache_settings',
                 title: adminDefinitionMessages.cache_settings_title,
                 isHidden: it.any(
-                    it.not(it.licensedForFeature('Cluster')),
+                    // NOTE: Custom cluster implementation (szncluster) doesn't require enterprise license
+                    // it.not(it.licensedForFeature('Cluster')),
                     it.configIsTrue('ExperimentalSettings', 'RestrictSystemAdmin'),
                     it.not(it.userHasReadPermissionOnResource(RESOURCE_KEYS.ENVIRONMENT.HIGH_AVAILABILITY)),
                 ),
