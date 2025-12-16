@@ -113,10 +113,11 @@ export default class ClusterSettings extends OLDAdminSettings<Props, State> {
     };
 
     renderSettings = () => {
-        const licenseEnabled = this.props.license.IsLicensed === 'true' && this.props.license.Cluster === 'true';
-        if (!licenseEnabled) {
-            return (<></>);
-        }
+        // NOTE: Custom cluster implementation (szncluster) doesn't require enterprise license
+        // const licenseEnabled = this.props.license.IsLicensed === 'true' && this.props.license.Cluster === 'true';
+        // if (!licenseEnabled) {
+        //     return (<></>);
+        // }
 
         let configLoadedFromCluster = null;
 
