@@ -1,6 +1,8 @@
 # SznCluster - Autodiscovery & Recovery Scenarios
 
-This document describes how autodiscovery and recovery work in a 2-node cluster setup under various failure scenarios.
+This document describes how autodiscovery and recovery work in a 2-3 node cluster setup under various failure scenarios.
+
+**Important**: This cluster uses **memberlist's built-in health checking** (probes every 3s, anti-entropy push/pull every 20s). There is NO custom health check mechanism - the database serves purely as a **seed list** for bootstrap.
 
 ## 🎯 **Initial Setup - 2 Nodes Start**
 
@@ -26,8 +28,9 @@ Node A startup:
 │
 └─ Started goroutines:
    ├─ Discovery ticker (every 15s) → UPDATE LastPingAt
-   ├─ Health check timer (T+3s initial, then every 20s)
-   └─ Deduplication cleanup (every 10s)
+   ├─► Deduplication cleanup (every 10s)
+   ├─► Queue pruning (every 30s)
+   └─► Metrics logging (every 60s)
 
 DB State:
 ┌──────────────┬──────────┬───────────┬────────────┐
@@ -77,38 +80,22 @@ Memberlist B: [A, B]
 
 ---
 
-### **T=3s, T=8s: Initial Health Checks**
+### **T=3s - T=30s: Memberlist Health Checks (Automatic)**
 
 ```
-Node A (T=3s):
-checkClusterHealth()
-├─ DB query → [node-a-uuid (self)]
-├─ Memberlist → [A]
-└─ No reconnects needed
+Memberlist (every 3s):
+├─ Probe random member (UDP PING)
+├─ Indirect probes if direct fails (ask others to probe)
+└─ Suspicion → Dead after 4 failed probes (~12-15s)
 
-Node B (T=8s):
-checkClusterHealth()
-├─ DB query → [node-a-uuid, node-b-uuid]
-├─ Memberlist → [A, B]
-└─ All nodes in memberlist ✅
-```
+Memberlist (every 20s):
+Push/Pull anti-entropy
+├─ Full member list exchange
+├─ State synchronization
+└─ Self-healing cluster
 
----
-
-### **T=15s, T=20s, T=30s: Periodic Updates**
-
-```
-Node A every 15s:
-updateClusterDiscovery() → UPDATE ClusterDiscovery SET LastPingAt=T15 WHERE Id='node-a-uuid'
-
-Node B every 15s:
-updateClusterDiscovery() → UPDATE ClusterDiscovery SET LastPingAt=T20 WHERE Id='node-b-uuid'
-
-Node A every 20s (T=23s, T=43s, ...):
-checkClusterHealth()
-├─ DB → [A, B] both with fresh LastPingAt
-├─ Memberlist → [A, B]
-└─ ✅ All good
+Node A & B every 15s:
+updateClusterDiscovery() → UPDATE ClusterDiscovery SET LastPingAt=NOW()
 
 DB State (T=30s):
 ┌──────────────┬──────────┬───────────┬────────────┐
@@ -152,21 +139,17 @@ Memberlist A: [A]  ← B removed due to Leave message
 ### **T=61-70s: Node B is down**
 
 ```
-Node A continues:
-├─ T=63s: checkClusterHealth()
-│  ├─ DB query → [node-a-uuid] (B no longer in DB!)
-│  ├─ Memberlist → [A]
-│  └─ ✅ No reconnects needed (B not in DB = inactive)
+Node A continues normally:
+├─► Memberlist: [A] (B removed due to Leave message)
+├─► T=65s: updateClusterDiscovery() → UPDATE LastPingAt=T65
 │
-├─ T=65s: updateClusterDiscovery()
-│  └─ UPDATE LastPingAt=T65 for node-a-uuid
+├─► If Node A broadcasts message:
+│  └─► sendToAllNodes()
+│     └─► members = memberlist.Members() = [A]
+│     └─► Sends only to self (skip) → NO MESSAGES FOR B ✅
 │
-├─ If Node A broadcasts message:
-│  └─ sendToAllNodes()
-│     └─ members = [A]
-│     └─ Sends only to self (skip) → NO MESSAGES FOR B ✅
-│        (B not in memberlist NOR in DB)
-```
+└─► No health check attempts - B not in memberlist
+    (Memberlist is source of truth, not DB)
 
 ### **T=70s: Node B comes back online**
 
@@ -278,29 +261,20 @@ DB State (T=210s):
 Memberlist A: [A]  ← B removed (detected dead)
 ```
 
-### **T=210-260s: Node A attempts recovery**
+### **T=210-260s: Node A waiting (no active recovery attempts)**
 
 ```
-T=220s: checkClusterHealth()
-├─ DB query → WHERE LastPingAt > (now - 30min)
-│  └─ [node-a-uuid (T220), node-b-uuid (T195)]
-│     └─ node-b-uuid is 25s old ✅ younger than 30min
-├─ Memberlist → [A]
-├─ node-b-uuid not in memberlist!
-├─ SecondsSinceLastPing = (T220 - T195) = 25s < 90s
-│  └─ "Node in DB not reachable, will attempt reconnect"
-├─ nodesToReconnect = ['10.1.2.4:8074']
-└─ memberlist.Join(['10.1.2.4:8074'])
-   └─ ❌ FAILED (B still down)
+Node A state:
+├─ Memberlist: [A] (B marked as dead)
+├─ DB: [node-a-uuid (fresh), node-b-uuid (T195, stale)]
+├─ updateClusterDiscovery() every 15s → keeps A alive in DB
+└─ NO active reconnection attempts - memberlist handles health
 
-T=240s: checkClusterHealth()
-├─ SecondsSinceLastPing = 45s < 90s
-└─ memberlist.Join(['10.1.2.4:8074']) → ❌ FAILED
-
-T=260s: checkClusterHealth()
-├─ SecondsSinceLastPing = 65s < 90s
-└─ memberlist.Join(['10.1.2.4:8074']) → ❌ FAILED
-   (Node B still down)
+Why no reconnect attempts?
+- Memberlist already detected B as dead (~12s after crash)
+- DB is seed list only, not source of truth
+- Anti-entropy push/pull will sync when B returns
+- Stale DB entry cleaned up after 30 minutes
 ```
 
 ### **T=260s: Node B comes back online**
@@ -340,18 +314,16 @@ Memberlist B: [A, B(new)]
 ### **T=280s+: Cleanup of old entry**
 
 ```
-T=280s: checkClusterHealth() on Node A or B
-├─ DB query → [node-a-uuid, node-b-uuid (T195), node-b-uuid-NEW (T280)]
-├─ node-b-uuid: SecondsSinceLastPing = 85s < 90s
-│  └─ Still attempts reconnect (unnecessarily)
-│
-T=290s+: SecondsSinceLastPing > 90s
-├─ "Node hasn't pinged recently, skipping reconnect"
-└─ Stops attempting reconnect
+DB State persists with stale entry:
+├─ node-a-uuid: LastPingAt=T280 (active)
+├─ node-b-uuid: LastPingAt=T195 (stale, 85s old)
+└─ node-b-uuid-NEW: LastPingAt=T280 (active)
 
 After 30 minutes (T=1800s+):
 ├─ Cleanup() job: DELETE WHERE LastPingAt < (now - 30min)
 └─ node-b-uuid (T195) deleted from DB ✅
+
+Note: Stale entry harmless - memberlist is source of truth
 ```
 
 ---
@@ -362,7 +334,7 @@ After 30 minutes (T=1800s+):
 |----------|--------------|------------|---------------|-------|
 | **10s restart** | Graceful | ✅ Immediate | ~10s | Leave message + DB cleanup → fast recovery |
 | **30s restart** | Graceful | ✅ Immediate | ~30s | Same as 10s, just longer downtime |
-| **60s crash** | Ungraceful | ❌ Delayed (30min) | ~60s | Stale DB entry, retry attempts every 20s |
+| **60s crash** | Ungraceful | ❌ Delayed (30min) | ~60s | Memberlist auto-detects death in 12-15s, node rejoins on restart |
 
 ---
 
@@ -375,25 +347,24 @@ updateClusterDiscovery()
    WHERE Id = <this-node-uuid>
 ```
 
-### **Health Check (every 20s)**
+### **Memberlist Health Check (automatic, built-in)**
 ```go
-checkClusterHealth()
-├─ dbNodes = SELECT * FROM ClusterDiscovery 
-│            WHERE LastPingAt > (now - 30min)
-├─ memberlistNodes = memberlist.Members()
-│
-└─ FOR each dbNode:
-   ├─ IF dbNode NOT IN memberlistNodes:
-   │  └─ IF (now - dbNode.LastPingAt) < 90s:
-   │     └─ Try memberlist.Join(dbNode.address)
-   │        ↳ If success → node returns to memberlist
-   │        ↳ If fail → retry in 20s
-   │
-   └─ IF (now - dbNode.LastPingAt) >= 90s:
-      └─ Skip (considered dead)
+// Runs every 3 seconds
+memberlist.Probe()
+├─ Select random member
+├─ Send UDP PING
+├─ Wait for ACK (timeout 2s)
+└─ If no ACK → indirect probes via other members
+   └─ After 4 failed probes (~12-15s) → mark as Dead
+
+// Runs every 20 seconds
+memberlist.PushPull()
+├─ Full member list exchange
+├─ State synchronization
+└─ Self-healing (discovers rejoined nodes)
 ```
 
-### **Cleanup (periodic job)**
+### **Cleanup (periodic job, every 30 minutes)**
 ```go
 Cleanup()
 └─ DELETE FROM ClusterDiscovery 
@@ -405,23 +376,25 @@ Cleanup()
 ## ⚡ **Timeouts & Intervals**
 
 ```
-Initial health check:     3s    ← First reconnect attempt after startup
-Periodic health check:   20s    ← Regular reconnect attempts
-Discovery update:        15s    ← LastPingAt refresh
-Memberlist probe:      ~10s    ← Dead node detection (UDP+TCP)
-Retry window:           90s    ← Attempts to connect nodes younger than 90s
+Discovery update:        15s    ← LastPingAt refresh in DB
+Memberlist probe:         3s    ← Health check frequency
+Probe timeout:            2s    ← Waiting for ACK
+Death detection:      12-15s    ← 4 failed probes (SuspicionMult=4)
+Push/Pull sync:          20s    ← Full state synchronization (anti-entropy)
 DB cleanup:          30 min    ← Removal of completely stale entries
-Deduplication:         5s     ← Window for duplicate detection
+Deduplication:           30s    ← Window for duplicate detection
+Queue pruning:           30s    ← Limit queue to 5000 messages
+Metrics logging:         60s    ← Queue and cluster metrics
 ```
 
 ---
 
 ## 💡 **Key Design Principles**
 
-1. **Database is Source of Truth** - DB discovery table determines which nodes should be active
-2. **Memberlist is Reality** - Memberlist shows which nodes are actually communicating
-3. **Health Check is Bridge** - Reconciles DB expectations with memberlist reality
-4. **Graceful Shutdown Cleans DB** - Prevents stale entries for clean restarts
-5. **Crash Recovery via Retry** - Ungraceful shutdowns handled by periodic reconnect attempts
-6. **90s Retry Window** - Balances between recovery and giving up on dead nodes
-7. **30min Cleanup** - Final cleanup for truly dead nodes that never returned
+1. **Memberlist is Source of Truth** - Live cluster state maintained by memberlist in memory
+2. **Database is Seed List** - DB provides bootstrap rendezvous point for new nodes
+3. **No Custom Health Checking** - Memberlist handles all probing and failure detection
+4. **Self-Healing via Anti-Entropy** - Push/Pull synchronization recovers from partitions
+5. **Graceful Shutdown Cleans DB** - Prevents stale entries for clean restarts
+6. **Crash Recovery Automatic** - Memberlist detects death, node rejoins via DB seed list
+7. **30min Cleanup** - Final cleanup for completely dead nodes (won't rejoin)

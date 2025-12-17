@@ -32,6 +32,9 @@ func (c *SznCluster) initializeMemberlist() error {
 	mlConfig.BindPort = *cfg.ClusterSettings.GossipPort
 	mlConfig.AdvertisePort = *cfg.ClusterSettings.GossipPort
 
+	// Configure UDP buffer size for gossip messages
+	mlConfig.UDPBufferSize = udpBufferSize
+
 	// Configure logger to use Mattermost logger
 	// Memberlist expects *log.Logger, but Mattermost uses *mlog.Logger, so we wrap it
 	// Log level filtering is handled by Mattermost configuration
@@ -108,25 +111,23 @@ func (c *SznCluster) initializeMemberlist() error {
 	// Adjust timeouts for Docker/container environments
 	// Shorter timeouts for faster failure detection and recovery
 	mlConfig.TCPTimeout = 10 * time.Second
-	mlConfig.ProbeTimeout = 2 * time.Second  // Reduced from 3s for faster failure detection
-	mlConfig.ProbeInterval = 3 * time.Second // Reduced from 5s for faster recovery
+	mlConfig.ProbeTimeout = time.Duration(probeTimeoutSec) * time.Second
+	mlConfig.ProbeInterval = time.Duration(probeIntervalSec) * time.Second
 
 	// Suspicion multiplier - how many failed probes before declaring node dead
-	// Default is 4, we keep it for balance between false positives and recovery speed
-	mlConfig.SuspicionMult = 4
+	mlConfig.SuspicionMult = suspicionMult
 
-	// Increase gossip frequency for faster message propagation and recovery
-	// Default is 200ms, we use 400ms as compromise between speed and bandwidth
-	mlConfig.GossipInterval = 400 * time.Millisecond
-	mlConfig.GossipNodes = 3 // Number of random nodes to gossip to per interval
+	// Gossip configuration for message propagation
+	mlConfig.GossipInterval = time.Duration(gossipIntervalMs) * time.Millisecond
+	mlConfig.GossipNodes = gossipNodes
 
-	// Increase retransmit multiplier for better reliability in Docker
-	// This increases the number of times a message is retransmitted
-	mlConfig.RetransmitMult = 4 // Default is 4, keep it
+	// Retransmit multiplier for message reliability
+	// Messages are retransmitted RetransmitMult * log(N+1) times
+	// This value is shared with TransmitLimitedQueue for consistent behavior
+	mlConfig.RetransmitMult = retransmitMult
 
-	// Push/Pull interval for full state sync (useful for recovery)
-	// Default is 30s, we reduce to 20s for faster state convergence
-	mlConfig.PushPullInterval = 20 * time.Second
+	// Push/Pull interval for full state sync (anti-entropy)
+	mlConfig.PushPullInterval = time.Duration(pushPullIntervalSec) * time.Second
 
 	mlog.Debug("SznCluster: Memberlist configured for container environment",
 		mlog.Bool("tcp_pings_enabled", !mlConfig.DisableTcpPings),

@@ -16,6 +16,7 @@
 package szncluster
 
 import (
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -32,33 +33,140 @@ import (
 	"github.com/mattermost/mattermost/server/v8/einterfaces"
 )
 
+// clusterBroadcast implements memberlist.Broadcast interface
+// for reliable message broadcasting with automatic retransmission and expiration
+type clusterBroadcast struct {
+	msg    []byte
+	notify chan<- struct{}
+}
+
+// Invalidates checks if this broadcast invalidates another broadcast
+// For cluster messages, we don't invalidate other messages
+func (b *clusterBroadcast) Invalidates(other memberlist.Broadcast) bool {
+	return false
+}
+
+// Message returns the message payload
+func (b *clusterBroadcast) Message() []byte {
+	return b.msg
+}
+
+// Finished is called when the message will no longer be broadcast
+// either due to invalidation or reaching the transmit limit
+func (b *clusterBroadcast) Finished() {
+	if b.notify != nil {
+		close(b.notify)
+	}
+}
+
 // Cluster configuration constants
 const (
-	// maxBroadcastQueueSize is the maximum number of messages in the broadcast queue
-	// If exceeded, oldest messages are dropped to prevent memory exhaustion
-	maxBroadcastQueueSize = 10000
+	// Memberlist gossip protocol configuration
+	// These values configure the behavior of Hashicorp Memberlist
+
+	// retransmitMult is the multiplier for message retransmissions
+	// Messages are retransmitted RetransmitMult * log(N+1) times before expiry
+	// This value MUST match memberlist.Config.RetransmitMult for proper message lifecycle
+	// Used by both memberlist gossip protocol and TransmitLimitedQueue
+	retransmitMult = 4
+
+	// gossipNodes is the number of random nodes to gossip to per interval
+	// Higher values = faster propagation but more bandwidth
+	// For 2-3 node clusters, 3 means all nodes are selected each iteration
+	gossipNodes = 3
+
+	// gossipIntervalMs is how often gossip messages are sent (in milliseconds)
+	// Default is 200ms, we use 400ms as compromise between speed and bandwidth
+	gossipIntervalMs = 400
+
+	// probeIntervalSec is how often to probe a random member for health check (in seconds)
+	// Shorter interval = faster failure detection but more network traffic
+	probeIntervalSec = 3
+
+	// probeTimeoutSec is the timeout waiting for probe ACK (in seconds)
+	// Should be less than probeIntervalSec
+	probeTimeoutSec = 2
+
+	// suspicionMult is the multiplier for suspicion timeout
+	// A node is marked dead after suspicionMult failed probes
+	// suspicionMult=4 means ~12-15 seconds to detect failure
+	suspicionMult = 4
+
+	// pushPullIntervalSec is the interval for full state synchronization (in seconds)
+	// Push/Pull provides anti-entropy and self-healing
+	// Default is 30s, we use 20s for faster convergence
+	pushPullIntervalSec = 20
+
+	// udpBufferSize is the UDP buffer size in bytes for memberlist gossip protocol
+	// Default is 1400 bytes which is too small for WebSocket events with post content
+	// Setting to 16KB allows posts and other large messages to fit in single UDP packet
+	// Messages larger than this will still be delivered via TCP (sendToAllNodes) but won't
+	// benefit from UDP gossip retransmission mechanism
+	udpBufferSize = 16384
+
+	// maxUdpBroadcastSize is the maximum size for messages to be queued for UDP gossip
+	// Set to smaller as udpBufferSize to account for overhead (compound message header, encryption, etc.)
+	// Messages larger than this will skip UDP queue but still be delivered via TCP
+	maxUdpBroadcastSize = int(udpBufferSize - 500)
+
+	// Application-level configuration
 
 	// deduplicationWindowMs is the time window in milliseconds for detecting duplicate messages
-	deduplicationWindowMs = 5000
+	// Increased to 30 seconds to account for gossip retransmission delays
+	// With retransmitMult=4 and typical cluster size (2-3 nodes), messages can be
+	// retransmitted for up to ~20 seconds, so 30s provides safe margin
+	deduplicationWindowMs = 30000
 
 	// cleanupIntervalSec is the interval in seconds for cleaning up the deduplication cache
 	cleanupIntervalSec = 10
 
-	// healthCheckIntervalSec is the interval in seconds for periodic health checks
-	healthCheckIntervalSec = 20
+	// queuePruneIntervalSec is the interval in seconds for pruning the broadcast queue
+	// This prevents unbounded queue growth under high load
+	queuePruneIntervalSec = 30
+
+	// maxQueueRetain is the maximum number of messages to retain in the queue during pruning
+	// Older messages beyond this limit will be discarded
+	maxQueueRetain = 5000
 
 	// discoveryUpdateIntervalSec is the interval in seconds for updating cluster discovery in DB
 	discoveryUpdateIntervalSec = 15
-
-	// initialHealthCheckSec is the delay before the first health check after startup
-	initialHealthCheckSec = 3
-
-	// reconnectWindowSec is the maximum age in seconds for attempting to reconnect to a node
-	// Nodes older than this are considered dead and not retried
-	reconnectWindowSec = 90
 )
 
 // SznCluster implements einterfaces.ClusterInterface using Hashicorp Memberlist
+//
+// Thread Safety:
+// - All public methods are thread-safe and can be called concurrently
+// - broadcasts (TransmitLimitedQueue) is internally thread-safe
+// - seenMessages and handlers are protected by RW mutexes
+// - memberlist operations are thread-safe per memberlist documentation
+//
+// Message Delivery Guarantees:
+//   - ClusterSendReliable: Uses gossip protocol with automatic retransmission
+//     Messages are delivered with high probability but order is NOT guaranteed
+//     RetransmitMult * log(N+1) retransmissions ensure eventual delivery
+//     Each gossip iteration sends to gossipNodes random members, not all members
+//     Same node may receive message multiple times (deduplication handles this)
+//   - ClusterSendBestEffort: Single UDP send, may be lost, no retransmission
+//
+// Gossip Protocol Behavior:
+// - Broadcasts are NOT sent to all nodes at once
+// - Every gossipIntervalMs, messages are sent to gossipNodes random members
+// - Over retransmitMult * log(N+1) iterations, probabilistically reaches all nodes
+// - Same node may be selected multiple times across iterations (by design)
+// - Messages expire after max retransmit count, typically 5-15 seconds
+//
+// Deduplication:
+// - Messages are deduplicated within 30-second window based on hash
+// - Essential because gossip may deliver same message to a node multiple times
+// - Prevents processing duplicate messages from different gossip paths
+// - Cache is automatically cleaned every 10 seconds
+//
+// Database Discovery:
+// - ClusterDiscovery table is primarily a SEED LIST for bootstrap
+// - Not a source of truth for current cluster state (memberlist is)
+// - Updated every 15s for system console visibility and node discovery
+// - Used by new nodes to find existing cluster members on startup
+// - System admins can monitor cluster state via system console
 type SznCluster struct {
 	platform   *platform.PlatformService
 	memberlist *memberlist.Memberlist
@@ -69,24 +177,20 @@ type SznCluster struct {
 	nodeID   string
 	hostname string
 
-	// Message handlers
+	// Message handlers (protected by handlersMu)
 	handlers   map[model.ClusterEvent]einterfaces.ClusterMessageHandler
 	handlersMu sync.RWMutex
 
-	// Broadcast queue for outgoing messages
-	broadcastQueue [][]byte
-	queueMu        sync.Mutex
+	// Broadcast queue for outgoing messages using memberlist's TransmitLimitedQueue
+	// This automatically handles retransmission limits and message expiration
+	// Thread-safe: TransmitLimitedQueue is internally synchronized
+	broadcasts *memberlist.TransmitLimitedQueue
 
-	// Deduplication cache for incoming messages
+	// Deduplication cache for incoming messages (protected by seenMu)
 	seenMessages map[string]int64 // hash -> timestamp (milliseconds)
 	seenMu       sync.RWMutex
 
-	// Failed send tracking for retry mechanism
-	// Tracks nodes that failed to receive messages, with backoff
-	failedSends map[string]int64 // nodeID -> last_failed_timestamp
-	failedMu    sync.RWMutex
-
-	// State
+	// State (protected by startMu)
 	started bool
 	startMu sync.Mutex
 
@@ -120,13 +224,23 @@ func NewSznCluster(ps *platform.PlatformService) einterfaces.ClusterInterface {
 	}
 
 	cluster := &SznCluster{
-		platform:       ps,
-		hostname:       hostname,
-		handlers:       make(map[model.ClusterEvent]einterfaces.ClusterMessageHandler),
-		broadcastQueue: make([][]byte, 0),
-		seenMessages:   make(map[string]int64),
-		failedSends:    make(map[string]int64),
-		shutdownCh:     make(chan struct{}),
+		platform:     ps,
+		hostname:     hostname,
+		handlers:     make(map[model.ClusterEvent]einterfaces.ClusterMessageHandler),
+		seenMessages: make(map[string]int64),
+		shutdownCh:   make(chan struct{}),
+	}
+
+	// Initialize TransmitLimitedQueue for broadcasts
+	// This handles automatic retransmission and expiration of messages
+	cluster.broadcasts = &memberlist.TransmitLimitedQueue{
+		NumNodes: func() int {
+			if cluster.memberlist == nil {
+				return 1
+			}
+			return cluster.memberlist.NumMembers()
+		},
+		RetransmitMult: retransmitMult, // Shared constant with memberlist config
 	}
 
 	// Create delegate and events handlers
@@ -270,12 +384,41 @@ func (c *SznCluster) GetMyClusterInfo() *model.ClusterInfo {
 	// Use same logic as for remote peers:
 	// - IPAddress: advertise address (where others should connect)
 	// - Hostname: display name (for debugging/info)
-	return &model.ClusterInfo{
-		Id:        c.nodeID,
-		IPAddress: c.getAdvertiseAddress(), // Where to connect
-		Hostname:  c.getHostname(),         // Display name
-		Version:   model.CurrentVersion,
+
+	// Compute config hash for web UI display (similar to enterprise implementation)
+	// This is used to detect configuration drift between cluster nodes
+	configHash := computeConfigHash(c.platform.Config())
+
+	// Get schema version for cluster sync verification
+	_, schemaVersion, err := c.platform.DatabaseTypeAndSchemaVersion()
+	if err != nil {
+		mlog.Warn("SznCluster: Failed to get schema version", mlog.Err(err))
+		schemaVersion = ""
 	}
+
+	return &model.ClusterInfo{
+		Id:            c.nodeID,
+		IPAddress:     c.getAdvertiseAddress(), // Where to connect
+		Hostname:      c.getHostname(),         // Display name
+		Version:       model.CurrentVersion,
+		ConfigHash:    configHash,
+		SchemaVersion: schemaVersion,
+	}
+}
+
+// computeConfigHash computes an MD5 hash of the configuration for drift detection
+// This matches the behavior of the enterprise cluster implementation
+func computeConfigHash(config *model.Config) string {
+	// Use ToJSON to get a stable representation of the config
+	jsonConfig, err := json.Marshal(config)
+	if err != nil {
+		mlog.Warn("SznCluster: Failed to marshal config for hash", mlog.Err(err))
+		return ""
+	}
+
+	// Compute MD5 hash (matches enterprise implementation)
+	hash := md5.Sum(jsonConfig)
+	return fmt.Sprintf("%x", hash)
 }
 
 // GetClusterInfos returns information about all nodes in the cluster
@@ -292,11 +435,13 @@ func (c *SznCluster) GetClusterInfos() ([]*model.ClusterInfo, error) {
 			// Add our own info
 			infos = append(infos, c.GetMyClusterInfo())
 		} else {
-			// Parse metadata to get version, node ID, hostname and advertise address
+			// Parse metadata to get version, node ID, hostname, advertise address, config hash and schema version
 			version := model.CurrentVersion
 			nodeID := member.Name
 			hostname := member.Addr.String()         // Default to IP if not in metadata
 			advertiseAddress := member.Addr.String() // Default to IP if not in metadata
+			configHash := ""
+			schemaVersion := ""
 
 			if len(member.Meta) > 0 {
 				var meta map[string]string
@@ -313,15 +458,23 @@ func (c *SznCluster) GetClusterInfos() ([]*model.ClusterInfo, error) {
 					if addr, ok := meta["advertise_address"]; ok {
 						advertiseAddress = addr
 					}
+					if hash, ok := meta["config_hash"]; ok {
+						configHash = hash
+					}
+					if schema, ok := meta["schema_version"]; ok {
+						schemaVersion = schema
+					}
 				}
 			}
 
 			// Add info from other nodes
 			infos = append(infos, &model.ClusterInfo{
-				Id:        nodeID,
-				IPAddress: advertiseAddress, // Use advertise address (where to connect)
-				Hostname:  hostname,         // Use hostname (for display/debug)
-				Version:   version,
+				Id:            nodeID,
+				IPAddress:     advertiseAddress, // Use advertise address (where to connect)
+				Hostname:      hostname,         // Use hostname (for display/debug)
+				Version:       version,
+				ConfigHash:    configHash,
+				SchemaVersion: schemaVersion,
 			})
 		}
 	}
@@ -345,38 +498,37 @@ func (c *SznCluster) SendClusterMessage(msg *model.ClusterMessage) {
 		return
 	}
 
-	// For ClusterSendReliable messages, add to broadcast queue for gossip-based retransmission
-	// Only fill queue if there are other nodes that could receive the messages
-	// For ClusterSendBestEffort messages, skip queue (send once only)
-	if msg.SendType == model.ClusterSendReliable && c.hasOtherNodes() {
-		c.queueMu.Lock()
-		// Enforce queue size limit to prevent memory exhaustion
-		if len(c.broadcastQueue) >= maxBroadcastQueueSize {
-			// Drop oldest message
-			c.broadcastQueue = c.broadcastQueue[1:]
-			mlog.Warn("SznCluster: Broadcast queue overflow, dropping oldest message",
-				mlog.Int("queue_size", maxBroadcastQueueSize))
+	// Choose delivery strategy based on SendType:
+	// - ClusterSendReliable: Hybrid "eager + reliable" approach
+	//   Queue for gossip retransmission (if size allows) + send immediately via TCP
+	// - ClusterSendBestEffort: Send once directly via TCP, no queuing
+
+	// For reliable messages, queue for UDP gossip retransmission if size allows
+	// Messages larger than maxUdpBroadcastSize would never be transmitted by memberlist
+	// (GetBroadcasts skips them), so we skip queueing to avoid filling the queue
+	if msg.SendType == model.ClusterSendReliable && c.memberlist != nil && c.memberlist.NumMembers() > 1 {
+		if len(data) <= maxUdpBroadcastSize {
+			c.broadcasts.QueueBroadcast(&clusterBroadcast{
+				msg: data,
+			})
+			mlog.Debug("SznCluster: Message queued for UDP gossip retransmit",
+				mlog.String("event", string(msg.Event)),
+				mlog.Int("queue_size", c.broadcasts.NumQueued()),
+				mlog.Int("message_size_bytes", len(data)))
+		} else {
+			mlog.Debug("SznCluster: Message too large for UDP gossip, TCP only",
+				mlog.String("event", string(msg.Event)),
+				mlog.Int("message_size_bytes", len(data)),
+				mlog.Int("max_udp_size", maxUdpBroadcastSize))
 		}
-		c.broadcastQueue = append(c.broadcastQueue, data)
-		c.queueMu.Unlock()
-		mlog.Debug("SznCluster: Message added to broadcast queue",
-			mlog.String("event", string(msg.Event)),
-			mlog.Int("queue_size", len(c.broadcastQueue)))
-	} else if msg.SendType == model.ClusterSendReliable {
-		mlog.Debug("SznCluster: Skipping broadcast queue, no other nodes in cluster",
-			mlog.String("event", string(msg.Event)))
 	}
 
-	// Send immediately to all nodes via direct messaging (both Reliable and BestEffort)
+	// Always send immediately to all nodes for instant delivery
+	// (both Reliable and BestEffort)
 	c.sendToAllNodes(data)
-
-	// Log cluster members for debugging
-	if c.memberlist != nil {
-		members := c.memberlist.Members()
-		mlog.Debug("SznCluster: Current cluster members",
-			mlog.Int("count", len(members)),
-			mlog.String("event", string(msg.Event)))
-	}
+	mlog.Debug("SznCluster: Message sent immediately",
+		mlog.String("event", string(msg.Event)),
+		mlog.String("send_type", msg.SendType))
 }
 
 // SendClusterMessageToNode sends a message to a specific node
@@ -628,30 +780,14 @@ func (c *SznCluster) startClusterDiscovery() {
 	// Update immediately on start
 	c.updateClusterDiscovery(clusterName)
 
-	// Perform initial health check after startup
-	// This helps nodes that started after others to discover and join them quickly
-	initialHealthCheck := time.NewTimer(initialHealthCheckSec * time.Second)
-	defer initialHealthCheck.Stop()
-
 	// Create ticker for periodic updates
-	// Shortened for faster cluster state convergence
 	c.discoveryTicker = time.NewTicker(discoveryUpdateIntervalSec * time.Second)
 	defer c.discoveryTicker.Stop()
 
-	// Create ticker for health checks
-	// Shortened for faster recovery of temporarily unavailable nodes
-	healthTicker := time.NewTicker(healthCheckIntervalSec * time.Second)
-	defer healthTicker.Stop()
-
 	for {
 		select {
-		case <-initialHealthCheck.C:
-			mlog.Info("SznCluster: Running initial health check")
-			c.checkClusterHealth(clusterName)
 		case <-c.discoveryTicker.C:
 			c.updateClusterDiscovery(clusterName)
-		case <-healthTicker.C:
-			c.checkClusterHealth(clusterName)
 		case <-c.shutdownCh:
 			// Cleanup on shutdown
 			c.cleanupClusterDiscovery()
@@ -661,6 +797,15 @@ func (c *SznCluster) startClusterDiscovery() {
 }
 
 // updateClusterDiscovery updates this node's entry in the cluster discovery table
+//
+// Purpose:
+//  1. SEED LIST: Provides bootstrap discovery for new nodes joining the cluster
+//  2. VISIBILITY: Allows system admins to monitor cluster state via system console
+//  3. PERSISTENCE: Maintains cluster membership info across restarts
+//
+// Note: This is NOT the source of truth for current cluster state.
+// Memberlist maintains the authoritative live member list in memory.
+// The DB serves as a seed list and monitoring interface.
 func (c *SznCluster) updateClusterDiscovery(clusterName string) {
 	advertiseAddress := c.getAdvertiseAddress()
 	cfg := c.platform.Config()
@@ -717,153 +862,35 @@ func (c *SznCluster) cleanupClusterDiscovery() {
 	}
 }
 
-// checkClusterHealth verifies that nodes in DB are reachable via memberlist
-// and attempts to reconnect to nodes that are alive in DB but not in memberlist
-func (c *SznCluster) checkClusterHealth(clusterName string) {
-	if !c.started || c.memberlist == nil {
-		return
-	}
-
-	// Get nodes from DB
-	discoveries, err := c.platform.Store.ClusterDiscovery().GetAll(model.CDSTypeApp, clusterName)
-	if err != nil {
-		mlog.Warn("SznCluster: Failed to get cluster discoveries for health check", mlog.Err(err))
-		return
-	}
-
-	// Get current memberlist members - build map by nodeID (Name)
-	members := c.memberlist.Members()
-	memberMap := make(map[string]*memberlist.Node) // nodeID -> Node
-	for _, member := range members {
-		memberMap[member.Name] = member
-	}
-
-	cfg := c.platform.Config()
-
-	// Track nodes that need reconnection
-	nodesToReconnect := make([]string, 0)
-
-	// Check each DB entry
-	for _, discovery := range discoveries {
-		// Skip ourselves (compare by nodeID stored in discovery.Id)
-		if discovery.Id == c.nodeID {
-			continue
-		}
-
-		// Check if this node is in memberlist by nodeID
-		member, foundInMemberlist := memberMap[discovery.Id]
-
-		// Build address for this node
-		gossipPort := discovery.GossipPort
-		if gossipPort == 0 {
-			gossipPort = int32(*cfg.ClusterSettings.GossipPort)
-		}
-		addr := fmt.Sprintf("%s:%d", discovery.Hostname, gossipPort)
-
-		if !foundInMemberlist {
-			// Node is in DB but not in memberlist - check if it's recently alive
-			secondsSinceLastPing := int((model.GetMillis() - discovery.LastPingAt) / 1000)
-
-			// Only try to reconnect if node was alive within reconnect window
-			// This prevents reconnecting to truly dead nodes
-			if secondsSinceLastPing < reconnectWindowSec {
-				mlog.Warn("SznCluster: Node in DB is not reachable via memberlist, will attempt reconnect",
-					mlog.String("node_id", discovery.Id),
-					mlog.String("hostname", discovery.Hostname),
-					mlog.Int("last_ping_seconds_ago", secondsSinceLastPing))
-
-				nodesToReconnect = append(nodesToReconnect, addr)
-			} else {
-				mlog.Debug("SznCluster: Node in DB is not reachable and hasn't pinged recently, skipping reconnect",
-					mlog.String("node_id", discovery.Id),
-					mlog.String("hostname", discovery.Hostname),
-					mlog.Int("last_ping_seconds_ago", secondsSinceLastPing))
-			}
-		} else {
-			// Node is in both DB and memberlist - verify address matches
-			memberAddr := fmt.Sprintf("%s:%d", member.Addr.String(), member.Port)
-			if memberAddr != addr {
-				mlog.Debug("SznCluster: Node address mismatch between DB and memberlist",
-					mlog.String("node_id", discovery.Id),
-					mlog.String("db_addr", addr),
-					mlog.String("memberlist_addr", memberAddr))
-			}
-		}
-	}
-
-	// Attempt to reconnect to missing nodes
-	if len(nodesToReconnect) > 0 {
-		mlog.Info("SznCluster: Attempting to reconnect to nodes",
-			mlog.Int("node_count", len(nodesToReconnect)),
-			mlog.Any("addresses", nodesToReconnect))
-
-		joined, err := c.memberlist.Join(nodesToReconnect)
-		if err != nil {
-			mlog.Warn("SznCluster: Failed to rejoin nodes during health check",
-				mlog.Err(err),
-				mlog.Int("attempted", len(nodesToReconnect)))
-		} else if joined > 0 {
-			mlog.Info("SznCluster: Successfully reconnected to nodes",
-				mlog.Int("reconnected_count", joined))
-		}
-	}
-
-	// Cleanup failed sends for nodes that are back in memberlist
-	c.failedMu.Lock()
-	for nodeID := range c.failedSends {
-		if _, ok := memberMap[nodeID]; ok {
-			delete(c.failedSends, nodeID)
-		}
-	}
-	c.failedMu.Unlock()
-
-	mlog.Debug("SznCluster: Health check completed",
-		mlog.Int("db_nodes", len(discoveries)),
-		mlog.Int("memberlist_nodes", len(members)),
-		mlog.Int("reconnect_attempted", len(nodesToReconnect)))
-}
-
-// hasOtherNodes checks if there are any other nodes in the cluster (besides this node)
-// Returns true if there are other nodes that could potentially receive messages
-func (c *SznCluster) hasOtherNodes() bool {
-	if c.memberlist == nil {
-		return false
-	}
-
-	members := c.memberlist.Members()
-	// If we have more than 1 member (including ourselves), there are other nodes
-	return len(members) > 1
-}
+// Note: hasOtherNodes() has been removed as it was redundant.
+// Use c.memberlist.NumMembers() > 1 directly for better performance.
 
 // sendToAllNodes sends data to all nodes in the cluster
 // Sends only to nodes currently in memberlist
-// Recovery of temporarily unavailable nodes is handled by checkClusterHealth()
+// Memberlist automatically handles node failure detection and recovery via probes and anti-entropy
 func (c *SznCluster) sendToAllNodes(data []byte) {
 	if c.memberlist == nil {
 		return
 	}
 
-	now := model.GetMillis()
+	// Send to all live nodes in memberlist
+	// Note: memberlist.Members() only returns nodes that are currently alive
+	// Failed/dead nodes are automatically excluded by memberlist's health checking
+	members := c.memberlist.Members()
 	successCount := 0
 	failCount := 0
 
-	// Send to all nodes in memberlist
-	members := c.memberlist.Members()
 	for _, member := range members {
 		if member.Name == c.nodeID {
 			continue // Skip ourselves
 		}
 
 		if err := c.memberlist.SendBestEffort(member, data); err != nil {
+			// Note: This is rare since Members() only returns live nodes
+			// Could happen due to network issues or node failure between Members() call and send
 			mlog.Warn("SznCluster: Failed to send to node",
 				mlog.String("node_id", member.Name),
 				mlog.Err(err))
-
-			// Track failed send for monitoring
-			c.failedMu.Lock()
-			c.failedSends[member.Name] = now
-			c.failedMu.Unlock()
-
 			failCount++
 		} else {
 			successCount++
@@ -931,19 +958,78 @@ func (c *SznCluster) cleanupSeenMessages() {
 }
 
 // startDeduplicationCleanup runs periodic cleanup of the deduplication cache
+// and prunes the broadcast queue to prevent unbounded growth
 func (c *SznCluster) startDeduplicationCleanup() {
-	ticker := time.NewTicker(cleanupIntervalSec * time.Second)
-	defer ticker.Stop()
+	cleanupTicker := time.NewTicker(cleanupIntervalSec * time.Second)
+	defer cleanupTicker.Stop()
 
-	mlog.Info("SznCluster: Started deduplication cleanup routine")
+	pruneTicker := time.NewTicker(queuePruneIntervalSec * time.Second)
+	defer pruneTicker.Stop()
+
+	metricsTicker := time.NewTicker(60 * time.Second) // Log metrics every minute
+	defer metricsTicker.Stop()
+
+	mlog.Info("SznCluster: Started maintenance routines",
+		mlog.Int("cleanup_interval_sec", cleanupIntervalSec),
+		mlog.Int("prune_interval_sec", queuePruneIntervalSec))
 
 	for {
 		select {
-		case <-ticker.C:
+		case <-cleanupTicker.C:
 			c.cleanupSeenMessages()
+
+		case <-pruneTicker.C:
+			c.pruneQueueIfNeeded()
+
+		case <-metricsTicker.C:
+			c.logQueueMetrics()
+
 		case <-c.shutdownCh:
-			mlog.Info("SznCluster: Stopping deduplication cleanup routine")
+			mlog.Info("SznCluster: Stopping maintenance routines")
 			return
 		}
 	}
+}
+
+// pruneQueueIfNeeded prunes the broadcast queue if it exceeds the retention limit
+func (c *SznCluster) pruneQueueIfNeeded() {
+	if c.broadcasts == nil {
+		return
+	}
+
+	queueSize := c.broadcasts.NumQueued()
+	if queueSize > maxQueueRetain {
+		c.broadcasts.Prune(maxQueueRetain)
+		mlog.Warn("SznCluster: Pruned broadcast queue",
+			mlog.Int("old_size", queueSize),
+			mlog.Int("new_size", c.broadcasts.NumQueued()),
+			mlog.Int("max_retain", maxQueueRetain))
+	}
+}
+
+// logQueueMetrics logs queue and cluster metrics for monitoring
+func (c *SznCluster) logQueueMetrics() {
+	if !c.started {
+		return
+	}
+
+	queueSize := 0
+	if c.broadcasts != nil {
+		queueSize = c.broadcasts.NumQueued()
+	}
+
+	c.seenMu.RLock()
+	seenCount := len(c.seenMessages)
+	c.seenMu.RUnlock()
+
+	memberCount := 0
+	if c.memberlist != nil {
+		memberCount = c.memberlist.NumMembers()
+	}
+
+	mlog.Info("SznCluster: Queue metrics",
+		mlog.Int("broadcast_queue_size", queueSize),
+		mlog.Int("dedup_cache_size", seenCount),
+		mlog.Int("cluster_members", memberCount),
+		mlog.Int("health_score", c.HealthScore()))
 }

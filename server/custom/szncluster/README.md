@@ -23,14 +23,14 @@ SznCluster is a custom implementation of the Mattermost cluster interface, devel
 
 - **Zero Enterprise License Required** - Full clustering functionality using open-source components
 - **SWIM Gossip Protocol** - Scalable Weakly-consistent Infection-style Membership protocol via Hashicorp Memberlist
-- **Automatic Node Discovery** - Database-backed discovery with automatic cleanup (10-minute timeout)
-- **Fast Recovery** - 3-second initial health check, 20-second periodic checks for quick node recovery
+- **Automatic Node Discovery** - Database-backed seed list for bootstrap with automatic cleanup (30-minute timeout)
+- **Self-Healing Cluster** - Memberlist automatic health probes (every 3s) with push/pull anti-entropy (every 20s)
 - **NodeID-Based Mapping** - Robust node identification survives IP/hostname changes (via discovery.Id)
-- **Database as Source of Truth** - DB discovery table drives reconnection logic for temporarily unavailable nodes
-- **Failed Send Tracking** - Monitors send failures for debugging and health monitoring
+- **Database as Seed List** - DB discovery table provides bootstrap rendezvous point for new nodes
 - **Leader Election** - Deterministic leader selection based on node ID
-- **Reliable Message Broadcasting** - Hybrid delivery: immediate send + gossip retransmission for reliability
-- **Message Deduplication** - Hash-based deduplication (5-second window) prevents duplicate processing
+- **Reliable Message Broadcasting** - Hybrid "eager + reliable" delivery: immediate send + gossip retransmission queue for reliability
+- **Smart Message Routing** - Messages > 15KB sent via TCP only (UDP gossip queue skipped to avoid blocking)
+- **Message Deduplication** - Hash-based deduplication (30-second window) prevents duplicate processing
 - **Health Monitoring** - Real-time cluster health tracking using memberlist health scores
 - **Docker/NAT Support** - Explicit bind vs advertise address handling for containerized environments
 - **Graceful Shutdown** - Proper cleanup and leave notifications
@@ -53,37 +53,40 @@ Mattermost's native clustering requires an Enterprise license. For internal depl
 
 SznCluster consists of four main Go files:
 
-#### 1. **cluster.go** (771 lines)
+#### 1. **cluster.go** (~1020 lines)
 Main implementation of the ClusterInterface:
 - `SznCluster` struct - implements `einterfaces.ClusterInterface`
-- Message broadcasting and routing (with immediate send + gossip retransmission)
-- Message deduplication (hash-based cache with periodic cleanup)
-- Leader election algorithm
-- Cluster discovery service
+- Message broadcasting via TransmitLimitedQueue (automatic expiry)
+- Message size-based routing (TCP direct for >15KB, TCP+UDP for ≤15KB)
+- Message deduplication (30-second window, SHA256-based cache)
+- Leader election algorithm (lexicographic node ID)
+- Cluster discovery service (DB updates every 15s)
 - Node lifecycle management
 - Handler registration and dispatch
+- Queue pruning and metrics logging
+- Configuration constants (gossip intervals, UDP buffer size, size limits)
 
-#### 2. **delegate.go** (120 lines)
+#### 2. **delegate.go** (~140 lines)
 Memberlist delegate implementations:
 - `clusterDelegate` - implements `memberlist.Delegate` interface
-  - `NodeMeta()` - Node metadata exchange
-  - `NotifyMsg()` - Incoming message handler
-  - `GetBroadcasts()` - Broadcast queue management
-  - `LocalState()` / `MergeRemoteState()` - State synchronization
+  - `NodeMeta()` - Node metadata exchange (version, nodeID, hostname, advertise address)
+  - `NotifyMsg()` - Incoming message handler (forwards to SznCluster)
+  - `GetBroadcasts()` - Delegates to TransmitLimitedQueue for automatic expiry
+  - `LocalState()` / `MergeRemoteState()` - No-op (state via broadcast messages)
 - `clusterEvents` - implements `memberlist.EventDelegate` interface
   - `NotifyJoin()` - Node join notifications
-  - `NotifyLeave()` - Node leave notifications
+  - `NotifyLeave()` - Node leave notifications (no DB cleanup - handled by periodic job)
   - `NotifyUpdate()` - Node update notifications
 
-#### 3. **memberlist.go** (302 lines)
+#### 3. **memberlist.go** (~340 lines)
 Memberlist initialization and utilities:
-- `initializeMemberlist()` - Memberlist configuration and creation
-- `joinCluster()` - Cluster join logic
-- `discoverNodes()` - Database-based node discovery
+- `initializeMemberlist()` - Memberlist configuration (see cluster.go constants for values)
+- `joinCluster()` - Cluster join logic (discovers nodes from DB, calls memberlist.Join)
+- `discoverNodes()` - Database-based node discovery (reads ClusterDiscovery table)
 - `getLocalIP()` - Network interface detection
-- `getHostname()` - Hostname resolution
+- `getHostname()` / `getAdvertiseAddress()` - Hostname/address resolution
 - `memberlistLogger` - Logger wrapper integrating memberlist logs with Mattermost mlog
-- Helper functions for serialization
+- Helper functions for configuration and network detection
 
 #### 4. **init.go** (17 lines)
 Automatic registration:
@@ -94,31 +97,31 @@ Automatic registration:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      Mattermost Server                       │
+│                      Mattermost Server                      │
 │  ┌────────────────────────────────────────────────────────┐ │
 │  │              Platform Layer (platform.go)              │ │
 │  │                                                        │ │
-│  │    ClusterInterface registration point                │ │
+│  │    ClusterInterface registration point                 │ │
 │  └────────────────────┬───────────────────────────────────┘ │
-│                       │                                      │
-│                       │ RegisterClusterInterface()           │
-│                       ▼                                      │
+│                       │                                     │
+│                       │ RegisterClusterInterface()          │
+│                       ▼                                     │
 │  ┌────────────────────────────────────────────────────────┐ │
 │  │                  SznCluster (cluster.go)               │ │
-│  │  ┌──────────────────────────────────────────────────┐ │ │
-│  │  │  • Message broadcasting                          │ │ │
-│  │  │  • Leader election                               │ │ │
-│  │  │  • Handler routing                               │ │ │
-│  │  │  • Cluster discovery                             │ │ │
-│  │  └──────────────────────────────────────────────────┘ │ │
-│  │           │                    │                        │ │
-│  │           │                    │                        │ │
-│  │           ▼                    ▼                        │ │
-│  │  ┌──────────────┐    ┌──────────────────┐             │ │
-│  │  │  Delegates   │    │  Memberlist      │             │ │
-│  │  │ (delegate.go)│◄──►│ (memberlist.go)  │             │ │
-│  │  └──────────────┘    └──────────────────┘             │ │
-│  └─────────────┬──────────────────┬──────────────────────┘ │
+│  │  ┌──────────────────────────────────────────────────┐  │ │
+│  │  │  • Message broadcasting                          │  │ │
+│  │  │  • Leader election                               │  │ │
+│  │  │  • Handler routing                               │  │ │
+│  │  │  • Cluster discovery                             │  │ │
+│  │  └──────────────────────────────────────────────────┘  │ │
+│  │           │                    │                       │ │
+│  │           │                    │                       │ │
+│  │           ▼                    ▼                       │ │
+│  │  ┌──────────────┐    ┌──────────────────┐              │ │
+│  │  │  Delegates   │    │  Memberlist      │              │ │
+│  │  │ (delegate.go)│◄──►│ (memberlist.go)  │              │ │
+│  │  └──────────────┘    └──────────────────┘              │ │
+│  └─────────────┬──────────────────┬───────────────────────┘ │
 │                │                  │                         │
 └────────────────┼──────────────────┼─────────────────────────┘
                  │                  │
@@ -175,15 +178,18 @@ Application Code
       │         ├─► Serialize message to JSON
       │         │
       │         ├─► If ClusterSendReliable:
-      │         │    └─► Add to broadcast queue (for gossip retransmission)
-      │         │              │
-      │         │              └─► GetBroadcasts() periodically reads queue
-      │         │                        │
-      │         │                        └─► Memberlist sends via gossip protocol
+      │         │    ├─► QueueBroadcast(msg) to TransmitLimitedQueue
+      │         │    │     │
+      │         │    │     └─► GetBroadcasts() periodically reads queue
+      │         │    │               │
+      │         │    │               └─► Memberlist gossip protocol (every 400ms)
+      │         │    │                      │
+      │         │    │                      └─► Automatic expiry after RetransmitMult * log(N+1) sends
+      │         │    │
+      │         │    └─► ALSO: sendToAllNodes() immediate UDP send (for instant delivery)
       │         │
-      │         └─► Send immediately to all nodes (both Reliable & BestEffort)
-      │                    │
-      │                    └─► SendBestEffort() UDP to each node
+      │         └─► If ClusterSendBestEffort:
+      │              └─► sendToAllNodes() UDP to each node (once, no retransmit)
       │
       └─► All cluster nodes receive message (with deduplication)
 ```
@@ -214,18 +220,18 @@ Memberlist (UDP packet received)
 
 ### Cluster Discovery
 
-SznCluster uses the database as a rendezvous point for node discovery:
+SznCluster uses the database as a **seed list** (bootstrap rendezvous point):
 
-1. **Discovery Service** (runs every 30 seconds)
+1. **Discovery Service** (runs every 15 seconds)
    ```go
    func startClusterDiscovery() {
-       ticker := time.NewTicker(30 * time.Second)
+       ticker := time.NewTicker(15 * time.Second)
        for {
            select {
            case <-ticker.C:
-               updateClusterDiscovery()  // Write to DB
+               updateClusterDiscovery()  // UPDATE LastPingAt in DB
            case <-shutdownCh:
-               cleanupClusterDiscovery() // Remove from DB
+               cleanupClusterDiscovery() // DELETE from DB on shutdown
                return
            }
        }
@@ -233,15 +239,22 @@ SznCluster uses the database as a rendezvous point for node discovery:
    ```
 
 2. **Node Startup**
-   - Query `ClusterDiscovery` table for other nodes
-   - Extract hostnames/IPs
-   - Attempt to join discovered nodes via Memberlist
+   - Query `ClusterDiscovery` table for other nodes (active in last 30 minutes)
+   - Extract advertise addresses + gossip ports
+   - Call `memberlist.Join(nodes)` with seed list
+   - Memberlist performs TCP handshake and receives full member list
 
-3. **Advantages**
-   - No need for static node list
+3. **Ongoing Operation**
+   - Memberlist handles all health checking (probes every 3s)
+   - Push/Pull anti-entropy synchronizes state (every 20s)
+   - DB is **NOT** source of truth - memberlist is
+   - DB provides visibility in System Console and bootstrap for new nodes
+
+4. **Advantages**
+   - No need for static node list in config
    - Automatic discovery of new nodes
-   - Works across network restarts
-   - Survives temporary network partitions
+   - Self-healing via memberlist anti-entropy
+   - Works in Docker/Kubernetes environments
 
 ### Leader Election
 
@@ -383,44 +396,95 @@ err := json.Unmarshal(data, &msg)
 
 ### Broadcast Queue and Message Delivery
 
-Implements hybrid delivery strategy for reliability:
+Uses TransmitLimitedQueue for automatic message lifecycle:
 
 ```go
 // Send message
 func SendClusterMessage(msg *model.ClusterMessage) {
     data := serialize(msg)
     
-    if msg.SendType == ClusterSendReliable {
-        // For reliable messages:
-        // 1. Add to queue for gossip retransmission
-        queueMu.Lock()
-        broadcastQueue = append(broadcastQueue, data)
-        queueMu.Unlock()
-        
-        // 2. Also send immediately for low latency
-        sendToAllNodes(data)
-    } else {
-        // For best-effort: send once, don't queue
-        sendToAllNodes(data)
+    // For reliable messages, queue first for automatic retransmission
+    if msg.SendType == ClusterSendReliable && memberlist.NumMembers() > 1 {
+        broadcasts.QueueBroadcast(&clusterBroadcast{msg: data})
+        // Gossip protocol provides retry mechanism via GetBroadcasts()
     }
+    
+    // Always send immediately to all nodes for instant delivery
+    // (both Reliable and BestEffort)
+    sendToAllNodes(data)
+    // Reliable = instant + retransmit queue
+    // BestEffort = instant only
 }
 
-// Memberlist calls this periodically for gossip
+// Memberlist calls this periodically (every 400ms)
 func GetBroadcasts(overhead, limit int) [][]byte {
-    // Return messages from queue that fit in limit
-    // Remove returned messages from queue
-    // This provides retransmission for reliable messages
+    // TransmitLimitedQueue handles:
+    // - Retransmission counting (RetransmitMult * log(N+1))
+    // - Message prioritization (newer messages first)
+    // - Automatic expiry when max transmits reached
+    // - Calls Finished() on expired broadcasts
+    return broadcasts.GetBroadcasts(overhead, limit)
 }
 ```
 
-**Why hybrid delivery?**
-- **Immediate send** ensures low latency (messages arrive within milliseconds)
-- **Gossip queue** provides redundancy and eventual delivery guarantees
-- **Deduplication** prevents processing duplicate messages from both paths
+**Why Hybrid "Eager + Reliable" Approach?**
+- **Immediate delivery** - direct send ensures instant propagation (no waiting for gossip cycle)
+- **Reliability** - queue provides automatic retransmission if initial send fails or is lost
+- **Best of both worlds** - speed of direct send + reliability of gossip protocol
+- **TransmitLimitedQueue benefits**:
+  - Automatic expiry - messages don't accumulate indefinitely
+  - Smart prioritization - newer messages sent more frequently
+  - Built-in retransmission - RetransmitMult * log(N+1) ensures delivery
+  - Handles transient network failures gracefully
+
+**Message Size Considerations:**
+
+The UDP gossip mechanism has size limitations due to packet size constraints:
+
+```go
+// Configuration constants in cluster.go
+const (
+    udpBufferSize = 16384  // 16KB UDP buffer for gossip protocol
+    
+    // maxUdpBroadcastSize limits messages queued for UDP gossip
+    // Set to 95% of buffer to account for overhead
+    maxUdpBroadcastSize = int(float64(udpBufferSize) * 0.95)  // ~15565 bytes
+)
+```
+
+**Message Routing Logic:**
+
+```go
+if msg.SendType == ClusterSendReliable && len(data) <= maxUdpBroadcastSize {
+    // Small messages: TCP + UDP gossip retransmit
+    broadcasts.QueueBroadcast(&clusterBroadcast{msg: data})
+} else if msg.SendType == ClusterSendReliable {
+    // Large messages: TCP only (UDP would never transmit them)
+    mlog.Debug("Message too large for UDP gossip, TCP only")
+}
+sendToAllNodes(data)  // Always send immediately via TCP
+```
+
+**Why Skip UDP Queue for Large Messages?**
+
+Memberlist's `GetBroadcasts()` implementation skips messages that don't fit in available UDP space:
+- Messages larger than UDP buffer would **never be transmitted** via gossip
+- They would **remain in queue indefinitely** until pruned (every 30s)
+- Skipping UDP queue prevents this "dead weight" accumulation
+- Large messages still arrive reliably via **TCP direct send** (no retransmit needed)
+
+**Practical Impact:**
+- ✅ **Posts with short text** (< 15KB): TCP immediate + UDP gossip retransmit
+- ✅ **Posts with long text** (> 15KB): TCP immediate only (no UDP retransmit)
+- ✅ **All messages arrive** - TCP direct send ensures delivery
+- ⚠️ **Large messages** lose UDP retransmit redundancy (acceptable tradeoff)
 
 ### Message Deduplication
 
-Since reliable messages are sent both immediately and via gossip, deduplication is essential to prevent duplicate processing.
+Since reliable messages use hybrid delivery (immediate send + gossip retransmission), deduplication is essential to prevent duplicate processing. A message may arrive multiple times:
+1. From initial direct send
+2. From gossip retransmissions (if initial send failed)
+3. From multiple gossip paths (gossip protocol sends to random nodes)
 
 #### Deduplication Strategy
 
@@ -447,8 +511,8 @@ func (c *SznCluster) isDuplicate(hash string) bool {
         return false
     }
     
-    // Consider duplicates only within 2-second window
-    return time.Now().Unix() - timestamp < 2
+    // Consider duplicates only within 30-second window
+    return time.Now().Unix() - timestamp < 30
 }
 
 // Mark message as seen
@@ -477,40 +541,92 @@ To prevent unbounded memory growth:
 
 ```go
 func (c *SznCluster) cleanupSeenMessages() {
-    cutoff := time.Now().Unix() - 2
+    cutoff := time.Now().Unix() - 30  // 30-second window
     
-    // Two-pass deletion: collect hashes first, then delete
-    toDelete := make([]string, 0)
-    c.seenMu.RLock()
+    // Direct deletion during iteration (safe in Go)
+    deleted := 0
+    c.seenMu.Lock()
+    defer c.seenMu.Unlock()
+    
     for hash, timestamp := range c.seenMessages {
         if timestamp < cutoff {
-            toDelete = append(toDelete, hash)
+            delete(c.seenMessages, hash)
+            deleted++
         }
     }
-    c.seenMu.RUnlock()
     
-    // Delete collected hashes
-    if len(toDelete) > 0 {
-        c.seenMu.Lock()
-        for _, hash := range toDelete {
-            delete(c.seenMessages, hash)
-        }
-        c.seenMu.Unlock()
+    if deleted > 0 {
         mlog.Debug("Cleaned up seen messages cache", 
-            mlog.Int("deleted_count", len(toDelete)))
+            mlog.Int("deleted", deleted),
+            mlog.Int("remaining", len(c.seenMessages)))
     }
 }
 
 // Run cleanup every 10 seconds
+// Also runs queue pruning every 30s and metrics logging every 60s
 func (c *SznCluster) startDeduplicationCleanup() {
-    ticker := time.NewTicker(10 * time.Second)
-    go func() {
-        for range ticker.C {
+    cleanupTicker := time.NewTicker(10 * time.Second)
+    pruneTicker := time.NewTicker(30 * time.Second)
+    metricsTicker := time.NewTicker(60 * time.Second)
+    
+    for {
+        select {
+        case <-cleanupTicker.C:
             c.cleanupSeenMessages()
+        case <-pruneTicker.C:
+            c.pruneQueueIfNeeded()  // Limit queue to 5000 messages
+        case <-metricsTicker.C:
+            c.logQueueMetrics()  // Log diagnostics
+        case <-c.shutdownCh:
+            return
         }
-    }()
+    }
 }
 ```
+
+#### Message Arrival Patterns with Hybrid Delivery
+
+The hybrid "eager + reliable" approach means ClusterSendReliable messages arrive multiple times:
+
+**Timeline for a single SMALL message (≤ 15KB):**
+```
+T=0ms    : Message queued + sent immediately to all nodes
+           ├─► First arrival: direct TCP send (instant delivery)
+           └─► Queued in UDP gossip for retransmit
+
+T=400ms  : Gossip cycle 1 - sent to 3 random nodes via GetBroadcasts()
+           └─► Duplicate arrival #1 (gossip retransmit)
+
+T=800ms  : Gossip cycle 2 - sent to 3 random nodes
+           └─► Duplicate arrival #2 (gossip retransmit)
+
+T=1200ms : Gossip cycle 3 - sent to 3 random nodes
+           └─► Duplicate arrival #3 (gossip retransmit)
+
+... continues for RetransmitMult * log(N+1) cycles (typically 4-5 for 2-3 nodes)
+
+T=2000ms : Message expires from gossip queue
+```
+
+**Result for SMALL messages**: Each node receives **5-6 times**:
+- 1x from immediate direct TCP send (T=0)
+- 4-5x from UDP gossip retransmissions (T=400-2000ms)
+
+**Timeline for a single LARGE message (> 15KB):**
+```
+T=0ms    : Message sent immediately to all nodes via TCP
+           ├─► First arrival: direct TCP send (instant delivery)
+           └─► NOT queued in UDP gossip (too large, would never transmit)
+```
+
+**Result for LARGE messages**: Each node receives **1 time** (TCP only)
+
+**Why this is good**:
+- **Immediate delivery** for user-facing features (posts appear instantly)
+- **Small messages** get UDP retransmit redundancy (if TCP fails)
+- **Large messages** avoid blocking UDP queue (TCP is reliable enough)
+- **Minimal overhead** with 30-second deduplication window
+- **No queue bloat** from oversized messages that would never transmit
 
 #### Memory Footprint
 
@@ -521,9 +637,9 @@ Each cache entry uses approximately:
 - **Total**: ~72-88 bytes per message
 
 For a busy cluster with 100 messages/second:
-- 2-second window = ~200 entries = ~14-18 KB
-- 10-second cleanup interval ensures low memory usage
-- Old entries are automatically purged
+- 30-second window = ~3000 entries = ~210-260 KB
+- 10-second cleanup interval ensures bounded memory usage
+- Essential for gossip protocol where same message arrives multiple times
 
 ### Memberlist Logger Integration
 

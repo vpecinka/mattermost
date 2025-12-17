@@ -28,12 +28,25 @@ func (d *clusterDelegate) NodeMeta(limit int) []byte {
 		return []byte{}
 	}
 
-	// Create metadata with version, node ID, hostname (for display) and advertise address (for connection)
+	// Get config hash for web UI display
+	configHash := computeConfigHash(d.cluster.platform.Config())
+
+	// Get schema version for cluster sync verification
+	_, schemaVersion, err := d.cluster.platform.DatabaseTypeAndSchemaVersion()
+	if err != nil {
+		mlog.Warn("SznCluster: Failed to get schema version for metadata", mlog.Err(err))
+		schemaVersion = ""
+	}
+
+	// Create metadata with version, node ID, hostname (for display), advertise address (for connection),
+	// config hash (for web UI) and schema version (for cluster sync)
 	meta := map[string]string{
 		"version":           model.CurrentVersion,
 		"node_id":           d.cluster.nodeID,
 		"hostname":          d.cluster.getHostname(),
 		"advertise_address": d.cluster.getAdvertiseAddress(),
+		"config_hash":       configHash,
+		"schema_version":    schemaVersion,
 	}
 
 	data, err := json.Marshal(meta)
@@ -64,40 +77,20 @@ func (d *clusterDelegate) NotifyMsg(msg []byte) {
 // overhead as provided with a limit on the total byte size allowed.
 // The total byte size of the resulting data to send must not exceed
 // the limit.
+// This now delegates to TransmitLimitedQueue which handles automatic
+// retransmission counting and message expiration.
 func (d *clusterDelegate) GetBroadcasts(overhead, limit int) [][]byte {
-	if d.cluster == nil {
+	if d.cluster == nil || d.cluster.broadcasts == nil {
+		mlog.Debug("GetBroadcasts: cluster or broadcasts is nil")
 		return nil
 	}
 
-	d.cluster.queueMu.Lock()
-	defer d.cluster.queueMu.Unlock()
-
-	if len(d.cluster.broadcastQueue) == 0 {
-		return nil
-	}
-
-	// Calculate how many messages we can send
-	broadcasts := make([][]byte, 0)
-	totalSize := 0
-
-	for i := 0; i < len(d.cluster.broadcastQueue); i++ {
-		msg := d.cluster.broadcastQueue[i]
-		msgSize := len(msg) + overhead
-
-		if totalSize+msgSize > limit {
-			break
-		}
-
-		broadcasts = append(broadcasts, msg)
-		totalSize += msgSize
-	}
-
-	// Remove sent messages from queue
-	if len(broadcasts) > 0 {
-		d.cluster.broadcastQueue = d.cluster.broadcastQueue[len(broadcasts):]
-	}
-
-	return broadcasts
+	// TransmitLimitedQueue handles all the complexity:
+	// - Tracks retransmission count per message
+	// - Prioritizes messages with fewer transmissions (newer messages)
+	// - Automatically expires messages after RetransmitMult * log(N+1) transmissions
+	// - Calls Finished() on expired broadcasts
+	return d.cluster.broadcasts.GetBroadcasts(overhead, limit)
 }
 
 // LocalState is used for a TCP Push/Pull. This is sent to
@@ -136,13 +129,6 @@ func (e *clusterEvents) NotifyJoin(node *memberlist.Node) {
 	mlog.Info("SznCluster: Node joined",
 		mlog.String("node_id", node.Name),
 		mlog.String("addr", node.Addr.String()))
-
-	// Clear any failed send tracking for this node
-	if e.cluster != nil {
-		e.cluster.failedMu.Lock()
-		delete(e.cluster.failedSends, node.Name)
-		e.cluster.failedMu.Unlock()
-	}
 }
 
 // NotifyLeave is invoked when a node is detected to have left.
@@ -152,9 +138,11 @@ func (e *clusterEvents) NotifyLeave(node *memberlist.Node) {
 		mlog.String("addr", node.Addr.String()))
 
 	// Don't cleanup from DB immediately - node might come back after temporary network issue
-	// The checkClusterHealth() function (runs every 60s) will attempt to reconnect
-	// to nodes that are still alive in DB but not in memberlist
-	// The periodic cleanup will handle stale entries after 30 minutes
+	// Memberlist handles all health checking and recovery via:
+	// - Automatic probes (every 3s) for failure detection
+	// - Push/Pull anti-entropy (every 20s) for state synchronization
+	// - Nodes that restart will use DB as seed list to rejoin
+	// The periodic cleanup job will remove stale DB entries after 30 minutes
 }
 
 // NotifyUpdate is invoked when a node is detected to have updated.
