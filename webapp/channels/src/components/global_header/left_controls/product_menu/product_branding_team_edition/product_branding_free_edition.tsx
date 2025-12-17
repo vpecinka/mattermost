@@ -51,6 +51,9 @@ const ProductBrandingFreeEdition = (): JSX.Element => {
         badgeText = 'TEAM EDITION';
     }
 
+    // Always display custom badge
+    badgeText = 'SEZNAM TEAMS';
+
     return (
         <ProductBrandingFreeEditionContainer tabIndex={-1}>
             <StyledLogo
