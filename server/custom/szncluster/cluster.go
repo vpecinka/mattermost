@@ -99,15 +99,14 @@ const (
 
 	// udpBufferSize is the UDP buffer size in bytes for memberlist gossip protocol
 	// Default is 1400 bytes which is too small for WebSocket events with post content
-	// Setting to 16KB allows posts and other large messages to fit in single UDP packet
 	// Messages larger than this will still be delivered via TCP (sendToAllNodes) but won't
 	// benefit from UDP gossip retransmission mechanism
-	udpBufferSize = 16384
+	udpBufferSize = 1400
 
 	// maxUdpBroadcastSize is the maximum size for messages to be queued for UDP gossip
 	// Set to smaller as udpBufferSize to account for overhead (compound message header, encryption, etc.)
 	// Messages larger than this will skip UDP queue but still be delivered via TCP
-	maxUdpBroadcastSize = int(udpBufferSize - 500)
+	maxUdpBroadcastSize = int(udpBufferSize - 100)
 
 	// Application-level configuration
 
@@ -566,7 +565,7 @@ func (c *SznCluster) SendClusterMessageToNode(nodeID string, msg *model.ClusterM
 	}
 
 	// Send to specific node
-	if err := c.memberlist.SendBestEffort(targetNode, data); err != nil {
+	if err := c.memberlist.SendReliable(targetNode, data); err != nil {
 		return model.NewAppError("SznCluster.SendClusterMessageToNode", "cluster.send_failed", nil, err.Error(), 500)
 	}
 
@@ -885,7 +884,7 @@ func (c *SznCluster) sendToAllNodes(data []byte) {
 			continue // Skip ourselves
 		}
 
-		if err := c.memberlist.SendBestEffort(member, data); err != nil {
+		if err := c.memberlist.SendReliable(member, data); err != nil {
 			// Note: This is rare since Members() only returns live nodes
 			// Could happen due to network issues or node failure between Members() call and send
 			mlog.Warn("SznCluster: Failed to send to node",
