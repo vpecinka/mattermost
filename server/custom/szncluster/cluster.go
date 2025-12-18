@@ -171,6 +171,7 @@ type SznCluster struct {
 	memberlist *memberlist.Memberlist
 	delegate   *clusterDelegate
 	events     *clusterEvents
+	metrics    einterfaces.MetricsInterface
 
 	// Node identification
 	nodeID   string
@@ -224,6 +225,7 @@ func NewSznCluster(ps *platform.PlatformService) einterfaces.ClusterInterface {
 
 	cluster := &SznCluster{
 		platform:     ps,
+		metrics:      ps.Metrics(),
 		hostname:     hostname,
 		handlers:     make(map[model.ClusterEvent]einterfaces.ClusterMessageHandler),
 		seenMessages: make(map[string]int64),
@@ -488,6 +490,15 @@ func (c *SznCluster) SendClusterMessage(msg *model.ClusterMessage) {
 		return
 	}
 
+	// Measure request duration for metrics
+	startTime := time.Now()
+	defer func() {
+		if c.metrics != nil {
+			c.metrics.IncrementClusterRequest()
+			c.metrics.ObserveClusterRequestDuration(time.Since(startTime).Seconds())
+		}
+	}()
+
 	mlog.Debug("SznCluster: Broadcasting message", mlog.String("event", string(msg.Event)))
 
 	// Serialize the message
@@ -532,6 +543,15 @@ func (c *SznCluster) SendClusterMessage(msg *model.ClusterMessage) {
 
 // SendClusterMessageToNode sends a message to a specific node
 func (c *SznCluster) SendClusterMessageToNode(nodeID string, msg *model.ClusterMessage) error {
+	// Measure request duration for metrics
+	startTime := time.Now()
+	defer func() {
+		if c.metrics != nil {
+			c.metrics.IncrementClusterRequest()
+			c.metrics.ObserveClusterRequestDuration(time.Since(startTime).Seconds())
+		}
+	}()
+
 	if !c.started {
 		return model.NewAppError("SznCluster.SendClusterMessageToNode", "cluster.not_started", nil, "", 500)
 	}
@@ -581,6 +601,11 @@ func (c *SznCluster) NotifyMsg(buf []byte) {
 	if err := json.Unmarshal(buf, &msg); err != nil {
 		mlog.Error("SznCluster: Failed to deserialize message", mlog.Err(err))
 		return
+	}
+
+	// Report cluster event type metric
+	if c.metrics != nil {
+		c.metrics.IncrementClusterEventType(msg.Event)
 	}
 
 	// Check for duplicates and mark as seen atomically
