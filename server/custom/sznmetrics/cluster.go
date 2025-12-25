@@ -12,6 +12,20 @@ import (
 )
 
 func (m *SznMetrics) initClusterMetrics() {
+	m.clusterHealthGauge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace:   MetricsNamespace,
+		Subsystem:   MetricsSubsystemCluster,
+		Name:        "cluster_health_score",
+		Help:        "A score that gives an idea of how well it is meeting the soft-real time requirements of the gossip protocol.",
+		ConstLabels: m.additionalLabels,
+	}, func() float64 {
+		if m.Platform.Cluster() == nil {
+			return 0
+		}
+		return float64(m.Platform.Cluster().HealthScore())
+	})
+	m.Registry.MustRegister(m.clusterHealthGauge)
+
 	m.clusterRequestsDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemCluster,

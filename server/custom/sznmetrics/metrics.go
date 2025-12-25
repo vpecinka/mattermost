@@ -77,6 +77,7 @@ type SznMetrics struct {
 	apiEndpointDuration *prometheus.HistogramVec
 
 	// Cluster metrics
+	clusterHealthGauge      prometheus.GaugeFunc
 	clusterRequestsDuration prometheus.Histogram
 	clusterRequestsCounter  prometheus.Counter
 	clusterEventTypeCounter *prometheus.CounterVec
