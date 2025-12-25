@@ -111,7 +111,7 @@ type SznMetrics struct {
 
 	// Plugin metrics
 	pluginHookDuration          *prometheus.HistogramVec
-	pluginMultiHookIterDuration prometheus.Histogram
+	pluginMultiHookIterDuration *prometheus.HistogramVec
 	pluginMultiHookDuration     prometheus.Histogram
 	pluginAPIDuration           *prometheus.HistogramVec
 

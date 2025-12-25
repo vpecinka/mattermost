@@ -15,14 +15,15 @@ import (
 	// Enterprise Imports
 	// _ "github.com/mattermost/mattermost/server/v8/enterprise"
 
+	// Custom SznMetrics - Provides Prometheus metrics support without enterprise license
+	// MUST be first so metrics are available during initialization of szncluster and sznsearch
+	_ "github.com/mattermost/mattermost/server/v8/custom/sznmetrics"
+
 	// Custom SznCluster - Provides cluster support without enterprise
 	_ "github.com/mattermost/mattermost/server/v8/custom/szncluster"
 
 	// Custom SznSearch Engine - MUST be after enterprise to override elasticsearch
 	_ "github.com/mattermost/mattermost/server/v8/custom/sznsearch/sznsearch"
-
-	// Custom SznMetrics - Provides Prometheus metrics support without enterprise license
-	_ "github.com/mattermost/mattermost/server/v8/custom/sznmetrics"
 )
 
 func main() {

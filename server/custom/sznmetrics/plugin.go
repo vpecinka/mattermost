@@ -21,14 +21,14 @@ func (m *SznMetrics) initPluginMetrics() {
 	}, []string{"plugin_id", "hook_name", "success"})
 	m.Registry.MustRegister(m.pluginHookDuration)
 
-	m.pluginMultiHookIterDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+	m.pluginMultiHookIterDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemPlugin,
 		Name:        "multi_hook_iteration_time_seconds",
 		Help:        "Time taken for a single plugin iteration in multi-hook in seconds.",
 		ConstLabels: m.additionalLabels,
 		Buckets:     []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
-	})
+	}, []string{"plugin_id"})
 	m.Registry.MustRegister(m.pluginMultiHookIterDuration)
 
 	m.pluginMultiHookDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
@@ -70,7 +70,7 @@ func (m *SznMetrics) ObservePluginHookDuration(pluginID, hookName string, succes
 // ObservePluginMultiHookIterationDuration observes plugin multi-hook iteration duration
 func (m *SznMetrics) ObservePluginMultiHookIterationDuration(pluginID string, elapsed float64) {
 	if m.pluginMultiHookIterDuration != nil {
-		m.pluginMultiHookIterDuration.Observe(elapsed)
+		m.pluginMultiHookIterDuration.With(prometheus.Labels{"plugin_id": pluginID}).Observe(elapsed)
 	}
 }
 

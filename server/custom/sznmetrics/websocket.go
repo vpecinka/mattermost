@@ -102,9 +102,7 @@ func (m *SznMetrics) DecrementWebSocketBroadcastUsersRegistered(hub string, amou
 
 // IncrementWebsocketReconnectEvent increments websocket reconnect counter
 func (m *SznMetrics) IncrementWebsocketReconnectEvent(eventType string) {
-	if m.websocketReconnectCounter != nil {
-		m.websocketReconnectCounter.With(prometheus.Labels{"type": eventType, "disconnect_error_code": ""}).Inc()
-	}
+	m.IncrementWebsocketReconnectEventWithDisconnectErrCode(eventType, "")
 }
 
 // IncrementWebsocketReconnectEventWithDisconnectErrCode increments reconnect counter with error code
