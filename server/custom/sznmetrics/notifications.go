@@ -11,96 +11,87 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-var (
-	notificationCounter            *prometheus.CounterVec
-	notificationAckCounter         *prometheus.CounterVec
-	notificationSuccessCounter     *prometheus.CounterVec
-	notificationErrorCounter       *prometheus.CounterVec
-	notificationNotSentCounter     *prometheus.CounterVec
-	notificationUnsupportedCounter *prometheus.CounterVec
-)
-
 func (m *SznMetrics) initNotificationMetrics() {
-	notificationCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.notificationCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemNotifications,
 		Name:        "total",
 		Help:        "The total number of notifications sent.",
 		ConstLabels: m.additionalLabels,
 	}, []string{"type", "platform"})
-	m.Registry.MustRegister(notificationCounter)
+	m.Registry.MustRegister(m.notificationCounter)
 
-	notificationAckCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.notificationAckCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemNotifications,
 		Name:        "ack_total",
 		Help:        "The total number of notifications acknowledged.",
 		ConstLabels: m.additionalLabels,
 	}, []string{"type", "platform"})
-	m.Registry.MustRegister(notificationAckCounter)
+	m.Registry.MustRegister(m.notificationAckCounter)
 
-	notificationSuccessCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.notificationSuccessCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemNotifications,
 		Name:        "success_total",
 		Help:        "The total number of successful notifications.",
 		ConstLabels: m.additionalLabels,
 	}, []string{"type", "platform"})
-	m.Registry.MustRegister(notificationSuccessCounter)
+	m.Registry.MustRegister(m.notificationSuccessCounter)
 
-	notificationErrorCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.notificationErrorCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemNotifications,
 		Name:        "error_total",
 		Help:        "The total number of notification errors.",
 		ConstLabels: m.additionalLabels,
 	}, []string{"type", "reason", "platform"})
-	m.Registry.MustRegister(notificationErrorCounter)
+	m.Registry.MustRegister(m.notificationErrorCounter)
 
-	notificationNotSentCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.notificationNotSentCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemNotifications,
 		Name:        "not_sent_total",
 		Help:        "The total number of notifications not sent.",
 		ConstLabels: m.additionalLabels,
 	}, []string{"type", "reason", "platform"})
-	m.Registry.MustRegister(notificationNotSentCounter)
+	m.Registry.MustRegister(m.notificationNotSentCounter)
 
-	notificationUnsupportedCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.notificationUnsupportedCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemNotifications,
 		Name:        "unsupported_total",
 		Help:        "The total number of unsupported notifications.",
 		ConstLabels: m.additionalLabels,
 	}, []string{"type", "reason", "platform"})
-	m.Registry.MustRegister(notificationUnsupportedCounter)
+	m.Registry.MustRegister(m.notificationUnsupportedCounter)
 }
 
 // IncrementNotificationCounter increments notification counter
 func (m *SznMetrics) IncrementNotificationCounter(notificationType model.NotificationType, platform string) {
-	if notificationCounter != nil {
-		notificationCounter.With(prometheus.Labels{"type": string(notificationType), "platform": platform}).Inc()
+	if m.notificationCounter != nil {
+		m.notificationCounter.With(prometheus.Labels{"type": string(notificationType), "platform": platform}).Inc()
 	}
 }
 
 // IncrementNotificationAckCounter increments notification ack counter
 func (m *SznMetrics) IncrementNotificationAckCounter(notificationType model.NotificationType, platform string) {
-	if notificationAckCounter != nil {
-		notificationAckCounter.With(prometheus.Labels{"type": string(notificationType), "platform": platform}).Inc()
+	if m.notificationAckCounter != nil {
+		m.notificationAckCounter.With(prometheus.Labels{"type": string(notificationType), "platform": platform}).Inc()
 	}
 }
 
 // IncrementNotificationSuccessCounter increments notification success counter
 func (m *SznMetrics) IncrementNotificationSuccessCounter(notificationType model.NotificationType, platform string) {
-	if notificationSuccessCounter != nil {
-		notificationSuccessCounter.With(prometheus.Labels{"type": string(notificationType), "platform": platform}).Inc()
+	if m.notificationSuccessCounter != nil {
+		m.notificationSuccessCounter.With(prometheus.Labels{"type": string(notificationType), "platform": platform}).Inc()
 	}
 }
 
 // IncrementNotificationErrorCounter increments notification error counter
 func (m *SznMetrics) IncrementNotificationErrorCounter(notificationType model.NotificationType, errorReason model.NotificationReason, platform string) {
-	if notificationErrorCounter != nil {
-		notificationErrorCounter.With(prometheus.Labels{
+	if m.notificationErrorCounter != nil {
+		m.notificationErrorCounter.With(prometheus.Labels{
 			"type":     string(notificationType),
 			"reason":   string(errorReason),
 			"platform": platform,
@@ -110,8 +101,8 @@ func (m *SznMetrics) IncrementNotificationErrorCounter(notificationType model.No
 
 // IncrementNotificationNotSentCounter increments notification not sent counter
 func (m *SznMetrics) IncrementNotificationNotSentCounter(notificationType model.NotificationType, notSentReason model.NotificationReason, platform string) {
-	if notificationNotSentCounter != nil {
-		notificationNotSentCounter.With(prometheus.Labels{
+	if m.notificationNotSentCounter != nil {
+		m.notificationNotSentCounter.With(prometheus.Labels{
 			"type":     string(notificationType),
 			"reason":   string(notSentReason),
 			"platform": platform,
@@ -121,8 +112,8 @@ func (m *SznMetrics) IncrementNotificationNotSentCounter(notificationType model.
 
 // IncrementNotificationUnsupportedCounter increments notification unsupported counter
 func (m *SznMetrics) IncrementNotificationUnsupportedCounter(notificationType model.NotificationType, notSentReason model.NotificationReason, platform string) {
-	if notificationUnsupportedCounter != nil {
-		notificationUnsupportedCounter.With(prometheus.Labels{
+	if m.notificationUnsupportedCounter != nil {
+		m.notificationUnsupportedCounter.With(prometheus.Labels{
 			"type":     string(notificationType),
 			"reason":   string(notSentReason),
 			"platform": platform,

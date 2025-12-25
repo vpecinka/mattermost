@@ -10,27 +10,17 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-var (
-	sharedChannelsSyncCounter                *prometheus.CounterVec
-	sharedChannelsTaskInQueueDuration        prometheus.Histogram
-	sharedChannelsQueueSize                  prometheus.Gauge
-	sharedChannelsSyncCollectionDuration     *prometheus.HistogramVec
-	sharedChannelsSyncSendDuration           *prometheus.HistogramVec
-	sharedChannelsSyncCollectionStepDuration *prometheus.HistogramVec
-	sharedChannelsSyncSendStepDuration       *prometheus.HistogramVec
-)
-
 func (m *SznMetrics) initSharedChannelsMetrics() {
-	sharedChannelsSyncCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.sharedChannelsSyncCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemSharedChannels,
 		Name:        "sync_total",
 		Help:        "The total number of shared channels syncs.",
 		ConstLabels: m.additionalLabels,
 	}, []string{"remote_id"})
-	m.Registry.MustRegister(sharedChannelsSyncCounter)
+	m.Registry.MustRegister(m.sharedChannelsSyncCounter)
 
-	sharedChannelsTaskInQueueDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+	m.sharedChannelsTaskInQueueDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemSharedChannels,
 		Name:        "task_in_queue_duration_seconds",
@@ -38,18 +28,18 @@ func (m *SznMetrics) initSharedChannelsMetrics() {
 		ConstLabels: m.additionalLabels,
 		Buckets:     []float64{0.1, 0.5, 1, 5, 10, 30, 60, 300, 600},
 	})
-	m.Registry.MustRegister(sharedChannelsTaskInQueueDuration)
+	m.Registry.MustRegister(m.sharedChannelsTaskInQueueDuration)
 
-	sharedChannelsQueueSize = prometheus.NewGauge(prometheus.GaugeOpts{
+	m.sharedChannelsQueueSize = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemSharedChannels,
 		Name:        "queue_size",
 		Help:        "The size of the shared channels queue.",
 		ConstLabels: m.additionalLabels,
 	})
-	m.Registry.MustRegister(sharedChannelsQueueSize)
+	m.Registry.MustRegister(m.sharedChannelsQueueSize)
 
-	sharedChannelsSyncCollectionDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	m.sharedChannelsSyncCollectionDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemSharedChannels,
 		Name:        "sync_collection_duration_seconds",
@@ -57,9 +47,9 @@ func (m *SznMetrics) initSharedChannelsMetrics() {
 		ConstLabels: m.additionalLabels,
 		Buckets:     []float64{0.1, 0.5, 1, 5, 10, 30, 60},
 	}, []string{"remote_id"})
-	m.Registry.MustRegister(sharedChannelsSyncCollectionDuration)
+	m.Registry.MustRegister(m.sharedChannelsSyncCollectionDuration)
 
-	sharedChannelsSyncSendDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	m.sharedChannelsSyncSendDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemSharedChannels,
 		Name:        "sync_send_duration_seconds",
@@ -67,9 +57,9 @@ func (m *SznMetrics) initSharedChannelsMetrics() {
 		ConstLabels: m.additionalLabels,
 		Buckets:     []float64{0.1, 0.5, 1, 5, 10, 30, 60},
 	}, []string{"remote_id"})
-	m.Registry.MustRegister(sharedChannelsSyncSendDuration)
+	m.Registry.MustRegister(m.sharedChannelsSyncSendDuration)
 
-	sharedChannelsSyncCollectionStepDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	m.sharedChannelsSyncCollectionStepDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemSharedChannels,
 		Name:        "sync_collection_step_duration_seconds",
@@ -77,9 +67,9 @@ func (m *SznMetrics) initSharedChannelsMetrics() {
 		ConstLabels: m.additionalLabels,
 		Buckets:     []float64{0.01, 0.05, 0.1, 0.5, 1, 5, 10},
 	}, []string{"remote_id", "step"})
-	m.Registry.MustRegister(sharedChannelsSyncCollectionStepDuration)
+	m.Registry.MustRegister(m.sharedChannelsSyncCollectionStepDuration)
 
-	sharedChannelsSyncSendStepDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	m.sharedChannelsSyncSendStepDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemSharedChannels,
 		Name:        "sync_send_step_duration_seconds",
@@ -87,54 +77,54 @@ func (m *SznMetrics) initSharedChannelsMetrics() {
 		ConstLabels: m.additionalLabels,
 		Buckets:     []float64{0.01, 0.05, 0.1, 0.5, 1, 5, 10},
 	}, []string{"remote_id", "step"})
-	m.Registry.MustRegister(sharedChannelsSyncSendStepDuration)
+	m.Registry.MustRegister(m.sharedChannelsSyncSendStepDuration)
 }
 
 // IncrementSharedChannelsSyncCounter increments shared channels sync counter
 func (m *SznMetrics) IncrementSharedChannelsSyncCounter(remoteID string) {
-	if sharedChannelsSyncCounter != nil {
-		sharedChannelsSyncCounter.With(prometheus.Labels{"remote_id": remoteID}).Inc()
+	if m.sharedChannelsSyncCounter != nil {
+		m.sharedChannelsSyncCounter.With(prometheus.Labels{"remote_id": remoteID}).Inc()
 	}
 }
 
 // ObserveSharedChannelsTaskInQueueDuration observes task in queue duration
 func (m *SznMetrics) ObserveSharedChannelsTaskInQueueDuration(elapsed float64) {
-	if sharedChannelsTaskInQueueDuration != nil {
-		sharedChannelsTaskInQueueDuration.Observe(elapsed)
+	if m.sharedChannelsTaskInQueueDuration != nil {
+		m.sharedChannelsTaskInQueueDuration.Observe(elapsed)
 	}
 }
 
 // ObserveSharedChannelsQueueSize observes queue size
 func (m *SznMetrics) ObserveSharedChannelsQueueSize(size int64) {
-	if sharedChannelsQueueSize != nil {
-		sharedChannelsQueueSize.Set(float64(size))
+	if m.sharedChannelsQueueSize != nil {
+		m.sharedChannelsQueueSize.Set(float64(size))
 	}
 }
 
 // ObserveSharedChannelsSyncCollectionDuration observes sync collection duration
 func (m *SznMetrics) ObserveSharedChannelsSyncCollectionDuration(remoteID string, elapsed float64) {
-	if sharedChannelsSyncCollectionDuration != nil {
-		sharedChannelsSyncCollectionDuration.With(prometheus.Labels{"remote_id": remoteID}).Observe(elapsed)
+	if m.sharedChannelsSyncCollectionDuration != nil {
+		m.sharedChannelsSyncCollectionDuration.With(prometheus.Labels{"remote_id": remoteID}).Observe(elapsed)
 	}
 }
 
 // ObserveSharedChannelsSyncSendDuration observes sync send duration
 func (m *SznMetrics) ObserveSharedChannelsSyncSendDuration(remoteID string, elapsed float64) {
-	if sharedChannelsSyncSendDuration != nil {
-		sharedChannelsSyncSendDuration.With(prometheus.Labels{"remote_id": remoteID}).Observe(elapsed)
+	if m.sharedChannelsSyncSendDuration != nil {
+		m.sharedChannelsSyncSendDuration.With(prometheus.Labels{"remote_id": remoteID}).Observe(elapsed)
 	}
 }
 
 // ObserveSharedChannelsSyncCollectionStepDuration observes sync collection step duration
 func (m *SznMetrics) ObserveSharedChannelsSyncCollectionStepDuration(remoteID string, step string, elapsed float64) {
-	if sharedChannelsSyncCollectionStepDuration != nil {
-		sharedChannelsSyncCollectionStepDuration.With(prometheus.Labels{"remote_id": remoteID, "step": step}).Observe(elapsed)
+	if m.sharedChannelsSyncCollectionStepDuration != nil {
+		m.sharedChannelsSyncCollectionStepDuration.With(prometheus.Labels{"remote_id": remoteID, "step": step}).Observe(elapsed)
 	}
 }
 
 // ObserveSharedChannelsSyncSendStepDuration observes sync send step duration
 func (m *SznMetrics) ObserveSharedChannelsSyncSendStepDuration(remoteID string, step string, elapsed float64) {
-	if sharedChannelsSyncSendStepDuration != nil {
-		sharedChannelsSyncSendStepDuration.With(prometheus.Labels{"remote_id": remoteID, "step": step}).Observe(elapsed)
+	if m.sharedChannelsSyncSendStepDuration != nil {
+		m.sharedChannelsSyncSendStepDuration.With(prometheus.Labels{"remote_id": remoteID, "step": step}).Observe(elapsed)
 	}
 }

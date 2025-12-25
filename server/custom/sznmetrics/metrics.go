@@ -13,6 +13,7 @@ package sznmetrics
 import (
 	"database/sql"
 	"os"
+	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -55,14 +56,134 @@ type SznMetrics struct {
 
 	// Database metrics
 	dbCollectors map[string]*dbCollector
+	dbMutex      sync.RWMutex
 
 	// Additional labels for cloud installations
 	additionalLabels map[string]string
+
+	// Post metrics
+	postCreateCounter     prometheus.Counter
+	webhookPostCounter    prometheus.Counter
+	postSentEmailCounter  prometheus.Counter
+	postSentPushCounter   prometheus.Counter
+	postBroadcastCounter  prometheus.Counter
+	postFileAttachCounter prometheus.Counter
+	postIndexCounter      prometheus.Counter
+
+	// HTTP metrics
+	httpRequestsCounter prometheus.Counter
+	httpErrorsCounter   prometheus.Counter
+	httpWebsocketsGauge *prometheus.GaugeVec
+	apiEndpointDuration *prometheus.HistogramVec
+
+	// Cluster metrics
+	clusterRequestsDuration prometheus.Histogram
+	clusterRequestsCounter  prometheus.Counter
+	clusterEventTypeCounter *prometheus.CounterVec
+
+	// Cache metrics
+	memCacheHitCounters          *prometheus.CounterVec
+	memCacheMissCounters         *prometheus.CounterVec
+	memCacheInvalidationCounters *prometheus.CounterVec
+	memCacheHitCounterSession    prometheus.Counter
+	memCacheMissCounterSession   prometheus.Counter
+	memCacheInvalidationSession  prometheus.Counter
+	etagHitCounters              *prometheus.CounterVec
+	etagMissCounters             *prometheus.CounterVec
+	redisEndpointDuration        *prometheus.HistogramVec
+
+	// Websocket metrics
+	websocketEventCounters            *prometheus.CounterVec
+	websocketBroadcastCounters        *prometheus.CounterVec
+	websocketBroadcastBufferSize      *prometheus.GaugeVec
+	websocketBroadcastUsersRegistered *prometheus.GaugeVec
+	websocketReconnectCounter         *prometheus.CounterVec
+
+	// Search metrics
+	postsSearchCounter  prometheus.Counter
+	postsSearchDuration prometheus.Histogram
+	filesSearchCounter  prometheus.Counter
+	filesSearchDuration prometheus.Histogram
+	fileIndexCounter    prometheus.Counter
+	userIndexCounter    prometheus.Counter
+	channelIndexCounter prometheus.Counter
+	storeMethodDuration *prometheus.HistogramVec
+
+	// Plugin metrics
+	pluginHookDuration          *prometheus.HistogramVec
+	pluginMultiHookIterDuration prometheus.Histogram
+	pluginMultiHookDuration     prometheus.Histogram
+	pluginAPIDuration           *prometheus.HistogramVec
+
+	// Shared Channels metrics
+	sharedChannelsSyncCounter                *prometheus.CounterVec
+	sharedChannelsTaskInQueueDuration        prometheus.Histogram
+	sharedChannelsQueueSize                  prometheus.Gauge
+	sharedChannelsSyncCollectionDuration     *prometheus.HistogramVec
+	sharedChannelsSyncSendDuration           *prometheus.HistogramVec
+	sharedChannelsSyncCollectionStepDuration *prometheus.HistogramVec
+	sharedChannelsSyncSendStepDuration       *prometheus.HistogramVec
+
+	// Notification metrics
+	notificationCounter            *prometheus.CounterVec
+	notificationAckCounter         *prometheus.CounterVec
+	notificationSuccessCounter     *prometheus.CounterVec
+	notificationErrorCounter       *prometheus.CounterVec
+	notificationNotSentCounter     *prometheus.CounterVec
+	notificationUnsupportedCounter *prometheus.CounterVec
+
+	// Job metrics
+	jobActiveGauge     *prometheus.GaugeVec
+	replicaLagAbsolute *prometheus.GaugeVec
+	replicaLagTime     *prometheus.GaugeVec
+	enabledUsersGauge  prometheus.Gauge
+
+	// Login metrics
+	loginCounter     prometheus.Counter
+	loginFailCounter prometheus.Counter
+
+	// Remote Cluster metrics
+	remoteClusterMsgSent         *prometheus.CounterVec
+	remoteClusterMsgReceived     *prometheus.CounterVec
+	remoteClusterMsgErrors       *prometheus.CounterVec
+	remoteClusterPingDuration    *prometheus.HistogramVec
+	remoteClusterClockSkew       *prometheus.GaugeVec
+	remoteClusterConnStateChange *prometheus.CounterVec
+
+	// Access Control metrics
+	accessControlSearchQueryDuration       prometheus.Histogram
+	accessControlExpressionCompileDuration prometheus.Histogram
+	accessControlEvaluateDuration          prometheus.Histogram
+	accessControlCacheInvalidation         prometheus.Counter
+
+	// Client metrics
+	clientTimeToFirstByte             *prometheus.HistogramVec
+	clientTimeToLastByte              *prometheus.HistogramVec
+	clientTimeToDomInteractive        *prometheus.HistogramVec
+	clientSplashScreenEnd             *prometheus.HistogramVec
+	clientFirstContentfulPaint        *prometheus.HistogramVec
+	clientLargestContentfulPaint      *prometheus.HistogramVec
+	clientInteractionToNextPaint      *prometheus.HistogramVec
+	clientCumulativeLayoutShift       *prometheus.HistogramVec
+	clientLongTasks                   *prometheus.CounterVec
+	clientPageLoadDuration            *prometheus.HistogramVec
+	clientChannelSwitchDuration       *prometheus.HistogramVec
+	clientTeamSwitchDuration          *prometheus.HistogramVec
+	clientRHSLoadDuration             *prometheus.HistogramVec
+	globalThreadsLoadDuration         *prometheus.HistogramVec
+	mobileClientLoadDuration          *prometheus.HistogramVec
+	mobileClientChannelSwitchDuration *prometheus.HistogramVec
+	mobileClientTeamSwitchDuration    *prometheus.HistogramVec
+	mobileClientNetworkMetrics        *prometheus.HistogramVec
+	mobileClientSessionMetadata       *prometheus.GaugeVec
+	desktopCpuUsage                   *prometheus.GaugeVec
+	desktopMemoryUsage                *prometheus.GaugeVec
 }
 
 type dbCollector struct {
-	db   *sql.DB
-	name string
+	db        *sql.DB
+	name      string
+	collector prometheus.Collector
 }
 
 // New creates a new SznMetrics instance
@@ -126,9 +247,18 @@ func (m *SznMetrics) RegisterDBCollector(db *sql.DB, name string) {
 		return
 	}
 
+	collector := collectors.NewDBStatsCollector(db, name)
+	if err := m.Registry.Register(collector); err != nil {
+		m.logger.Error("SznMetrics: Failed to register DB collector", mlog.String("name", name), mlog.Err(err))
+		return
+	}
+
+	m.dbMutex.Lock()
+	defer m.dbMutex.Unlock()
 	m.dbCollectors[name] = &dbCollector{
-		db:   db,
-		name: name,
+		db:        db,
+		name:      name,
+		collector: collector,
 	}
 
 	m.logger.Info("SznMetrics: Database collector registered", mlog.String("name", name))
@@ -136,8 +266,14 @@ func (m *SznMetrics) RegisterDBCollector(db *sql.DB, name string) {
 
 // UnregisterDBCollector unregisters a database connection pool
 func (m *SznMetrics) UnregisterDBCollector(db *sql.DB, name string) {
-	delete(m.dbCollectors, name)
-	m.logger.Info("SznMetrics: Database collector unregistered", mlog.String("name", name))
+	m.dbMutex.Lock()
+	defer m.dbMutex.Unlock()
+
+	if collector, ok := m.dbCollectors[name]; ok {
+		m.Registry.Unregister(collector.collector)
+		delete(m.dbCollectors, name)
+		m.logger.Info("SznMetrics: Database collector unregistered", mlog.String("name", name))
+	}
 }
 
 // GetLoggerMetricsCollector returns the logger metrics collector

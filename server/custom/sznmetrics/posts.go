@@ -10,126 +10,116 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-var (
-	postCreateCounter     prometheus.Counter
-	webhookPostCounter    prometheus.Counter
-	postSentEmailCounter  prometheus.Counter
-	postSentPushCounter   prometheus.Counter
-	postBroadcastCounter  prometheus.Counter
-	postFileAttachCounter prometheus.Counter
-	postIndexCounter      prometheus.Counter
-)
-
 func (m *SznMetrics) initPostMetrics() {
-	postCreateCounter = prometheus.NewCounter(prometheus.CounterOpts{
+	m.postCreateCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemPosts,
 		Name:        "total",
 		Help:        "The total number of posts created.",
 		ConstLabels: m.additionalLabels,
 	})
-	m.Registry.MustRegister(postCreateCounter)
+	m.Registry.MustRegister(m.postCreateCounter)
 
-	webhookPostCounter = prometheus.NewCounter(prometheus.CounterOpts{
+	m.webhookPostCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemPosts,
 		Name:        "webhooks_total",
 		Help:        "Total number of webhook posts created.",
 		ConstLabels: m.additionalLabels,
 	})
-	m.Registry.MustRegister(webhookPostCounter)
+	m.Registry.MustRegister(m.webhookPostCounter)
 
-	postSentEmailCounter = prometheus.NewCounter(prometheus.CounterOpts{
+	m.postSentEmailCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemPosts,
 		Name:        "emails_sent_total",
 		Help:        "The total number of emails sent because a post was created.",
 		ConstLabels: m.additionalLabels,
 	})
-	m.Registry.MustRegister(postSentEmailCounter)
+	m.Registry.MustRegister(m.postSentEmailCounter)
 
-	postSentPushCounter = prometheus.NewCounter(prometheus.CounterOpts{
+	m.postSentPushCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemPosts,
 		Name:        "pushes_sent_total",
 		Help:        "The total number of mobile push notifications sent because a post was created.",
 		ConstLabels: m.additionalLabels,
 	})
-	m.Registry.MustRegister(postSentPushCounter)
+	m.Registry.MustRegister(m.postSentPushCounter)
 
-	postBroadcastCounter = prometheus.NewCounter(prometheus.CounterOpts{
+	m.postBroadcastCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemPosts,
 		Name:        "broadcasts_total",
 		Help:        "The total number of websocket broadcasts sent because a post was created.",
 		ConstLabels: m.additionalLabels,
 	})
-	m.Registry.MustRegister(postBroadcastCounter)
+	m.Registry.MustRegister(m.postBroadcastCounter)
 
-	postFileAttachCounter = prometheus.NewCounter(prometheus.CounterOpts{
+	m.postFileAttachCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemPosts,
 		Name:        "file_attachments_total",
 		Help:        "The total number of file attachments created because a post was created.",
 		ConstLabels: m.additionalLabels,
 	})
-	m.Registry.MustRegister(postFileAttachCounter)
+	m.Registry.MustRegister(m.postFileAttachCounter)
 
-	postIndexCounter = prometheus.NewCounter(prometheus.CounterOpts{
+	m.postIndexCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemSearch,
 		Name:        "posts_indexed_total",
 		Help:        "The total number of posts indexed.",
 		ConstLabels: m.additionalLabels,
 	})
-	m.Registry.MustRegister(postIndexCounter)
+	m.Registry.MustRegister(m.postIndexCounter)
 }
 
 // IncrementPostCreate increments the post creation counter
 func (m *SznMetrics) IncrementPostCreate() {
-	if postCreateCounter != nil {
-		postCreateCounter.Inc()
+	if m.postCreateCounter != nil {
+		m.postCreateCounter.Inc()
 	}
 }
 
 // IncrementWebhookPost increments the webhook post counter
 func (m *SznMetrics) IncrementWebhookPost() {
-	if webhookPostCounter != nil {
-		webhookPostCounter.Inc()
+	if m.webhookPostCounter != nil {
+		m.webhookPostCounter.Inc()
 	}
 }
 
 // IncrementPostSentEmail increments the post email counter
 func (m *SznMetrics) IncrementPostSentEmail() {
-	if postSentEmailCounter != nil {
-		postSentEmailCounter.Inc()
+	if m.postSentEmailCounter != nil {
+		m.postSentEmailCounter.Inc()
 	}
 }
 
 // IncrementPostSentPush increments the post push notification counter
 func (m *SznMetrics) IncrementPostSentPush() {
-	if postSentPushCounter != nil {
-		postSentPushCounter.Inc()
+	if m.postSentPushCounter != nil {
+		m.postSentPushCounter.Inc()
 	}
 }
 
 // IncrementPostBroadcast increments the post broadcast counter
 func (m *SznMetrics) IncrementPostBroadcast() {
-	if postBroadcastCounter != nil {
-		postBroadcastCounter.Inc()
+	if m.postBroadcastCounter != nil {
+		m.postBroadcastCounter.Inc()
 	}
 }
 
 // IncrementPostFileAttachment increments the file attachment counter
 func (m *SznMetrics) IncrementPostFileAttachment(count int) {
-	if postFileAttachCounter != nil {
-		postFileAttachCounter.Add(float64(count))
+	if m.postFileAttachCounter != nil {
+		m.postFileAttachCounter.Add(float64(count))
 	}
 }
 
 // IncrementPostIndexCounter increments the post index counter
 func (m *SznMetrics) IncrementPostIndexCounter() {
-	if postIndexCounter != nil {
-		postIndexCounter.Inc()
+	if m.postIndexCounter != nil {
+		m.postIndexCounter.Inc()
 	}
 }

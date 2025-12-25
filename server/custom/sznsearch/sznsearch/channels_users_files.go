@@ -92,6 +92,11 @@ func (s *SznSearchImpl) IndexChannel(rctx request.CTX, channel *model.Channel, u
 		mlog.String("channel_name", channel.Name),
 	)
 
+	// Record metrics
+	if s.metrics != nil {
+		s.metrics.IncrementChannelIndexCounter()
+	}
+
 	return nil
 }
 
@@ -222,6 +227,11 @@ func (s *SznSearchImpl) IndexUser(rctx request.CTX, user *model.User, teamsIds, 
 		mlog.String("user_id", user.Id),
 		mlog.String("username", user.Username),
 	)
+
+	// Record metrics
+	if s.metrics != nil {
+		s.metrics.IncrementUserIndexCounter()
+	}
 
 	return nil
 }

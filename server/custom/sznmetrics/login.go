@@ -10,41 +10,36 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-var (
-	loginCounter     prometheus.Counter
-	loginFailCounter prometheus.Counter
-)
-
 func (m *SznMetrics) initLoginMetrics() {
-	loginCounter = prometheus.NewCounter(prometheus.CounterOpts{
+	m.loginCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemLogin,
 		Name:        "logins_total",
 		Help:        "The total number of successful logins.",
 		ConstLabels: m.additionalLabels,
 	})
-	m.Registry.MustRegister(loginCounter)
+	m.Registry.MustRegister(m.loginCounter)
 
-	loginFailCounter = prometheus.NewCounter(prometheus.CounterOpts{
+	m.loginFailCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemLogin,
 		Name:        "logins_fail_total",
 		Help:        "The total number of failed logins.",
 		ConstLabels: m.additionalLabels,
 	})
-	m.Registry.MustRegister(loginFailCounter)
+	m.Registry.MustRegister(m.loginFailCounter)
 }
 
 // IncrementLogin increments the login counter
 func (m *SznMetrics) IncrementLogin() {
-	if loginCounter != nil {
-		loginCounter.Inc()
+	if m.loginCounter != nil {
+		m.loginCounter.Inc()
 	}
 }
 
 // IncrementLoginFail increments the login failure counter
 func (m *SznMetrics) IncrementLoginFail() {
-	if loginFailCounter != nil {
-		loginFailCounter.Inc()
+	if m.loginFailCounter != nil {
+		m.loginFailCounter.Inc()
 	}
 }

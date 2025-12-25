@@ -10,28 +10,17 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-var (
-	postsSearchCounter  prometheus.Counter
-	postsSearchDuration prometheus.Histogram
-	filesSearchCounter  prometheus.Counter
-	filesSearchDuration prometheus.Histogram
-	fileIndexCounter    prometheus.Counter
-	userIndexCounter    prometheus.Counter
-	channelIndexCounter prometheus.Counter
-	storeMethodDuration *prometheus.HistogramVec
-)
-
 func (m *SznMetrics) initSearchMetrics() {
-	postsSearchCounter = prometheus.NewCounter(prometheus.CounterOpts{
+	m.postsSearchCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemSearch,
 		Name:        "posts_searches_total",
 		Help:        "The total number of posts searches.",
 		ConstLabels: m.additionalLabels,
 	})
-	m.Registry.MustRegister(postsSearchCounter)
+	m.Registry.MustRegister(m.postsSearchCounter)
 
-	postsSearchDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+	m.postsSearchDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemSearch,
 		Name:        "posts_search_duration_seconds",
@@ -39,18 +28,18 @@ func (m *SznMetrics) initSearchMetrics() {
 		ConstLabels: m.additionalLabels,
 		Buckets:     []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
 	})
-	m.Registry.MustRegister(postsSearchDuration)
+	m.Registry.MustRegister(m.postsSearchDuration)
 
-	filesSearchCounter = prometheus.NewCounter(prometheus.CounterOpts{
+	m.filesSearchCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemSearch,
 		Name:        "files_searches_total",
 		Help:        "The total number of files searches.",
 		ConstLabels: m.additionalLabels,
 	})
-	m.Registry.MustRegister(filesSearchCounter)
+	m.Registry.MustRegister(m.filesSearchCounter)
 
-	filesSearchDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+	m.filesSearchDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemSearch,
 		Name:        "files_search_duration_seconds",
@@ -58,36 +47,36 @@ func (m *SznMetrics) initSearchMetrics() {
 		ConstLabels: m.additionalLabels,
 		Buckets:     []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
 	})
-	m.Registry.MustRegister(filesSearchDuration)
+	m.Registry.MustRegister(m.filesSearchDuration)
 
-	fileIndexCounter = prometheus.NewCounter(prometheus.CounterOpts{
+	m.fileIndexCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemSearch,
 		Name:        "files_indexed_total",
 		Help:        "The total number of files indexed.",
 		ConstLabels: m.additionalLabels,
 	})
-	m.Registry.MustRegister(fileIndexCounter)
+	m.Registry.MustRegister(m.fileIndexCounter)
 
-	userIndexCounter = prometheus.NewCounter(prometheus.CounterOpts{
+	m.userIndexCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemSearch,
 		Name:        "users_indexed_total",
 		Help:        "The total number of users indexed.",
 		ConstLabels: m.additionalLabels,
 	})
-	m.Registry.MustRegister(userIndexCounter)
+	m.Registry.MustRegister(m.userIndexCounter)
 
-	channelIndexCounter = prometheus.NewCounter(prometheus.CounterOpts{
+	m.channelIndexCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemSearch,
 		Name:        "channels_indexed_total",
 		Help:        "The total number of channels indexed.",
 		ConstLabels: m.additionalLabels,
 	})
-	m.Registry.MustRegister(channelIndexCounter)
+	m.Registry.MustRegister(m.channelIndexCounter)
 
-	storeMethodDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	m.storeMethodDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace:   MetricsNamespace,
 		Subsystem:   MetricsSubsystemDB,
 		Name:        "store_time_seconds",
@@ -95,62 +84,62 @@ func (m *SznMetrics) initSearchMetrics() {
 		ConstLabels: m.additionalLabels,
 		Buckets:     []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
 	}, []string{"method", "success"})
-	m.Registry.MustRegister(storeMethodDuration)
+	m.Registry.MustRegister(m.storeMethodDuration)
 }
 
 // IncrementPostsSearchCounter increments posts search counter
 func (m *SznMetrics) IncrementPostsSearchCounter() {
-	if postsSearchCounter != nil {
-		postsSearchCounter.Inc()
+	if m.postsSearchCounter != nil {
+		m.postsSearchCounter.Inc()
 	}
 }
 
 // ObservePostsSearchDuration observes posts search duration
 func (m *SznMetrics) ObservePostsSearchDuration(elapsed float64) {
-	if postsSearchDuration != nil {
-		postsSearchDuration.Observe(elapsed)
+	if m.postsSearchDuration != nil {
+		m.postsSearchDuration.Observe(elapsed)
 	}
 }
 
 // IncrementFilesSearchCounter increments files search counter
 func (m *SznMetrics) IncrementFilesSearchCounter() {
-	if filesSearchCounter != nil {
-		filesSearchCounter.Inc()
+	if m.filesSearchCounter != nil {
+		m.filesSearchCounter.Inc()
 	}
 }
 
 // ObserveFilesSearchDuration observes files search duration
 func (m *SznMetrics) ObserveFilesSearchDuration(elapsed float64) {
-	if filesSearchDuration != nil {
-		filesSearchDuration.Observe(elapsed)
+	if m.filesSearchDuration != nil {
+		m.filesSearchDuration.Observe(elapsed)
 	}
 }
 
 // IncrementFileIndexCounter increments file index counter
 func (m *SznMetrics) IncrementFileIndexCounter() {
-	if fileIndexCounter != nil {
-		fileIndexCounter.Inc()
+	if m.fileIndexCounter != nil {
+		m.fileIndexCounter.Inc()
 	}
 }
 
 // IncrementUserIndexCounter increments user index counter
 func (m *SznMetrics) IncrementUserIndexCounter() {
-	if userIndexCounter != nil {
-		userIndexCounter.Inc()
+	if m.userIndexCounter != nil {
+		m.userIndexCounter.Inc()
 	}
 }
 
 // IncrementChannelIndexCounter increments channel index counter
 func (m *SznMetrics) IncrementChannelIndexCounter() {
-	if channelIndexCounter != nil {
-		channelIndexCounter.Inc()
+	if m.channelIndexCounter != nil {
+		m.channelIndexCounter.Inc()
 	}
 }
 
 // ObserveStoreMethodDuration observes store method duration
 func (m *SznMetrics) ObserveStoreMethodDuration(method, success string, elapsed float64) {
-	if storeMethodDuration != nil {
-		storeMethodDuration.With(prometheus.Labels{
+	if m.storeMethodDuration != nil {
+		m.storeMethodDuration.With(prometheus.Labels{
 			"method":  method,
 			"success": success,
 		}).Observe(elapsed)
