@@ -34,11 +34,13 @@ import (
 	"github.com/mattermost/mattermost/server/public/shared/mlog"
 	"github.com/mattermost/mattermost/server/v8/channels/app/platform"
 	"github.com/mattermost/mattermost/server/v8/custom/sznsearch/common"
+	"github.com/mattermost/mattermost/server/v8/einterfaces"
 )
 
 // SznSearchImpl implements searchengine.SearchEngineInterface for Seznam Search (ElasticSearch)
 type SznSearchImpl struct {
 	Platform *platform.PlatformService
+	metrics  einterfaces.MetricsInterface
 
 	client         *elasticsearch.Client
 	ready          int32 // 0=stopped, 1=running (health tracked by circuitBreaker)
@@ -202,6 +204,7 @@ func NewSznSearchEngine(ps *platform.PlatformService) *SznSearchImpl {
 
 	return &SznSearchImpl{
 		Platform:         ps,
+		metrics:          ps.Metrics(),
 		circuitBreaker:   circuitBreaker,
 		mutex:            common.NewKeyedMutex(),
 		stopChan:         make(chan struct{}),

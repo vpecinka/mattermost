@@ -30,6 +30,8 @@ import (
 
 // SearchPosts searches for posts in ElasticSearch
 func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*model.SearchParams, page, perPage int) ([]string, model.PostSearchMatches, *model.AppError) {
+	startTime := time.Now()
+
 	if !s.IsSearchEnabled() {
 		s.Platform.Log().Warn("SznSearch.SearchPosts: search not enabled, returning error")
 		return []string{}, nil, model.NewAppError("SznSearch.SearchPosts", "sznsearch.search_posts.disabled", nil, "", http.StatusInternalServerError)
@@ -206,6 +208,12 @@ func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*
 				mlog.Int("num_terms", len(terms)),
 			)
 		}
+	}
+
+	// Record metrics
+	if s.metrics != nil {
+		s.metrics.IncrementPostsSearchCounter()
+		s.metrics.ObservePostsSearchDuration(time.Since(startTime).Seconds())
 	}
 
 	return postIds, matches, nil
