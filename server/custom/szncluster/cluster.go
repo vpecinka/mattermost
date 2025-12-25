@@ -171,7 +171,6 @@ type SznCluster struct {
 	memberlist *memberlist.Memberlist
 	delegate   *clusterDelegate
 	events     *clusterEvents
-	metrics    einterfaces.MetricsInterface
 
 	// Node identification
 	nodeID   string
@@ -225,7 +224,6 @@ func NewSznCluster(ps *platform.PlatformService) einterfaces.ClusterInterface {
 
 	cluster := &SznCluster{
 		platform:     ps,
-		metrics:      ps.Metrics(),
 		hostname:     hostname,
 		handlers:     make(map[model.ClusterEvent]einterfaces.ClusterMessageHandler),
 		seenMessages: make(map[string]int64),
@@ -493,9 +491,9 @@ func (c *SznCluster) SendClusterMessage(msg *model.ClusterMessage) {
 	// Measure request duration for metrics
 	startTime := time.Now()
 	defer func() {
-		if c.metrics != nil {
-			c.metrics.IncrementClusterRequest()
-			c.metrics.ObserveClusterRequestDuration(time.Since(startTime).Seconds())
+		if metrics := c.platform.Metrics(); metrics != nil {
+			metrics.IncrementClusterRequest()
+			metrics.ObserveClusterRequestDuration(time.Since(startTime).Seconds())
 		}
 	}()
 
@@ -546,9 +544,9 @@ func (c *SznCluster) SendClusterMessageToNode(nodeID string, msg *model.ClusterM
 	// Measure request duration for metrics
 	startTime := time.Now()
 	defer func() {
-		if c.metrics != nil {
-			c.metrics.IncrementClusterRequest()
-			c.metrics.ObserveClusterRequestDuration(time.Since(startTime).Seconds())
+		if metrics := c.platform.Metrics(); metrics != nil {
+			metrics.IncrementClusterRequest()
+			metrics.ObserveClusterRequestDuration(time.Since(startTime).Seconds())
 		}
 	}()
 
@@ -604,8 +602,8 @@ func (c *SznCluster) NotifyMsg(buf []byte) {
 	}
 
 	// Report cluster event type metric
-	if c.metrics != nil {
-		c.metrics.IncrementClusterEventType(msg.Event)
+	if metrics := c.platform.Metrics(); metrics != nil {
+		metrics.IncrementClusterEventType(msg.Event)
 	}
 
 	// Check for duplicates and mark as seen atomically

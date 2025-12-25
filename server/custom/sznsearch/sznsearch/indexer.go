@@ -212,9 +212,9 @@ func (s *SznSearchImpl) indexMessageBatch(messages []common.IndexedMessage) *mod
 	s.circuitBreaker.RecordSuccess()
 
 	// Record metrics - increment counter for each message indexed
-	if s.metrics != nil {
+	if metrics := s.Platform.Metrics(); metrics != nil {
 		for range messages {
-			s.metrics.IncrementPostIndexCounter()
+			metrics.IncrementPostIndexCounter()
 		}
 	}
 
@@ -310,9 +310,9 @@ func (s *SznSearchImpl) indexFilesBatch(files []*model.FileInfo, channelID strin
 	s.circuitBreaker.RecordSuccess()
 
 	// Record metrics - increment counter for each file indexed
-	if s.metrics != nil {
+	if metrics := s.Platform.Metrics(); metrics != nil {
 		for range files {
-			s.metrics.IncrementFileIndexCounter()
+			metrics.IncrementFileIndexCounter()
 		}
 	}
 

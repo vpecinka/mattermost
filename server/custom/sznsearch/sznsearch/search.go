@@ -211,9 +211,9 @@ func (s *SznSearchImpl) SearchPosts(channels model.ChannelList, searchParams []*
 	}
 
 	// Record metrics
-	if s.metrics != nil {
-		s.metrics.IncrementPostsSearchCounter()
-		s.metrics.ObservePostsSearchDuration(time.Since(startTime).Seconds())
+	if metrics := s.Platform.Metrics(); metrics != nil {
+		metrics.IncrementPostsSearchCounter()
+		metrics.ObservePostsSearchDuration(time.Since(startTime).Seconds())
 	}
 
 	return postIds, matches, nil
