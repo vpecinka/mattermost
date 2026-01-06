@@ -29,9 +29,10 @@ func (a *App) ProcessScheduledPosts(rctx request.CTX) {
 		return
 	}
 
-	if a.License() == nil {
-		return
-	}
+	// SZN: Disabled license check for scheduled posts - feature is fully implemented in open source
+	// if a.License() == nil {
+	// 	return
+	// }
 
 	beforeTime := model.GetMillis()
 	afterTime := beforeTime - (24 * 60 * 60 * 1000) // subtracting 24 hours from beforeTime
