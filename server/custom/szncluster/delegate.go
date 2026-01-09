@@ -129,6 +129,11 @@ func (e *clusterEvents) NotifyJoin(node *memberlist.Node) {
 	mlog.Info("SznCluster: Node joined",
 		mlog.String("node_id", node.Name),
 		mlog.String("addr", node.Addr.String()))
+
+	// SZN: Check if leader changed after node join
+	if e.cluster != nil {
+		e.cluster.checkAndNotifyLeaderChange()
+	}
 }
 
 // NotifyLeave is invoked when a node is detected to have left.
@@ -143,6 +148,11 @@ func (e *clusterEvents) NotifyLeave(node *memberlist.Node) {
 	// - Push/Pull anti-entropy (every 20s) for state synchronization
 	// - Nodes that restart will use DB as seed list to rejoin
 	// The periodic cleanup job will remove stale DB entries after 30 minutes
+
+	// SZN: Check if leader changed after node left
+	if e.cluster != nil {
+		e.cluster.checkAndNotifyLeaderChange()
+	}
 }
 
 // NotifyUpdate is invoked when a node is detected to have updated.
@@ -150,4 +160,9 @@ func (e *clusterEvents) NotifyUpdate(node *memberlist.Node) {
 	mlog.Debug("SznCluster: Node updated",
 		mlog.String("node_id", node.Name),
 		mlog.String("addr", node.Addr.String()))
+
+	// SZN: Check if leader changed after node update (shouldn't normally happen, but for safety)
+	if e.cluster != nil {
+		e.cluster.checkAndNotifyLeaderChange()
+	}
 }

@@ -176,6 +176,10 @@ type SznCluster struct {
 	nodeID   string
 	hostname string
 
+	// Leader tracking (protected by leaderMu)
+	lastKnownLeader string
+	leaderMu        sync.RWMutex
+
 	// Message handlers (protected by handlersMu)
 	handlers   map[model.ClusterEvent]einterfaces.ClusterMessageHandler
 	handlersMu sync.RWMutex
@@ -293,7 +297,15 @@ func (c *SznCluster) StartInterNodeCommunication() {
 	go c.startDeduplicationCleanup()
 
 	c.started = true
-	mlog.Info("SznCluster: Inter-node communication started successfully")
+
+	// Initialize leader tracking after cluster is started
+	c.leaderMu.Lock()
+	c.lastKnownLeader = c.getCurrentLeader()
+	c.leaderMu.Unlock()
+
+	mlog.Info("SznCluster: Inter-node communication started successfully",
+		mlog.String("initial_leader", c.lastKnownLeader),
+		mlog.Bool("this_node_is_leader", c.IsLeader()))
 }
 
 // StopInterNodeCommunication stops the cluster communication
@@ -360,6 +372,47 @@ func (c *SznCluster) IsLeader() bool {
 	}
 
 	return leaderName == c.nodeID
+}
+
+// getCurrentLeader returns the current leader node ID
+func (c *SznCluster) getCurrentLeader() string {
+	if !c.started || c.memberlist == nil {
+		return c.nodeID // We're the only node
+	}
+
+	members := c.memberlist.Members()
+	if len(members) == 0 {
+		return c.nodeID // We're the only node
+	}
+
+	// Find node with smallest name (ID)
+	leaderName := c.nodeID
+	for _, member := range members {
+		if member.Name < leaderName {
+			leaderName = member.Name
+		}
+	}
+
+	return leaderName
+}
+
+// checkAndNotifyLeaderChange checks if the leader has changed and notifies listeners
+func (c *SznCluster) checkAndNotifyLeaderChange() {
+	currentLeader := c.getCurrentLeader()
+
+	c.leaderMu.Lock()
+	previousLeader := c.lastKnownLeader
+	c.lastKnownLeader = currentLeader
+	c.leaderMu.Unlock()
+
+	// If leader changed, notify platform to invoke listeners
+	if previousLeader != "" && previousLeader != currentLeader {
+		mlog.Info("SznCluster: Leader changed",
+			mlog.String("previous_leader", previousLeader),
+			mlog.String("new_leader", currentLeader),
+			mlog.Bool("this_node_is_leader", currentLeader == c.nodeID))
+		c.platform.InvokeClusterLeaderChangedListeners()
+	}
 }
 
 // HealthScore returns a health score for this node (lower is better)
