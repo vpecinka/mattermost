@@ -31,10 +31,11 @@ func (ps *PlatformService) NewClusterDiscoveryService() *ClusterDiscoveryService
 // PlatformService.IsLeader returns true if this server is the leader of its cluster. If the server isn't in a cluster
 // (because it's not supported by the server or its license), this will always return true.
 func (ps *PlatformService) IsLeader() bool {
-	license := ps.License()
-	if license == nil || license.Features == nil || license.Features.Cluster == nil || !*license.Features.Cluster {
-		// Clustering can't be enabled without a valid license that supports it
-		return true
+
+	// SznCluster: Allow cluster usage without enterprise license
+	// Original enterprise implementation required license, but our custom cluster doesn't
+	if *ps.Config().ClusterSettings.Enable && ps.clusterIFace != nil {
+		return ps.clusterIFace.IsLeader()
 	}
 
 	if !*ps.Config().ClusterSettings.Enable {

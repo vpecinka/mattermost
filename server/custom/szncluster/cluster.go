@@ -301,11 +301,21 @@ func (c *SznCluster) StartInterNodeCommunication() {
 	// Initialize leader tracking after cluster is started
 	c.leaderMu.Lock()
 	c.lastKnownLeader = c.getCurrentLeader()
+	isInitialLeader := c.lastKnownLeader == c.nodeID
 	c.leaderMu.Unlock()
 
 	mlog.Info("SznCluster: Inter-node communication started successfully",
 		mlog.String("initial_leader", c.lastKnownLeader),
-		mlog.Bool("this_node_is_leader", c.IsLeader()))
+		mlog.Bool("this_node_is_leader", isInitialLeader))
+
+	// CRITICAL: If we are the leader on startup, invoke listeners immediately
+	// This ensures that jobs start on the leader node even when cluster starts
+	// without any leader changes. Without this, jobs would never start if the
+	// leader node starts and never loses leadership.
+	if isInitialLeader {
+		mlog.Info("SznCluster: This node is initial leader, invoking listeners for job startup")
+		c.platform.InvokeClusterLeaderChangedListeners()
+	}
 }
 
 // StopInterNodeCommunication stops the cluster communication
@@ -352,26 +362,38 @@ func (c *SznCluster) GetClusterId() string {
 }
 
 // IsLeader returns true if this node is the cluster leader
-// Uses simple algorithm: node with lexicographically smallest ID is the leader
+// Uses cached leader information to avoid race conditions with memberlist updates
 func (c *SznCluster) IsLeader() bool {
 	if !c.started || c.memberlist == nil {
 		return false
 	}
 
-	members := c.memberlist.Members()
-	if len(members) == 0 {
-		return true // We're the only node
-	}
+	// Use cached leader information to ensure consistency
+	// This avoids race conditions where memberlist.Members() might return
+	// different results between checkAndNotifyLeaderChange() and listener callbacks
+	c.leaderMu.RLock()
+	currentLeader := c.lastKnownLeader
+	c.leaderMu.RUnlock()
 
-	// Find node with smallest name (ID)
-	leaderName := c.nodeID
-	for _, member := range members {
-		if member.Name < leaderName {
-			leaderName = member.Name
+	// If no leader tracked yet (e.g., during startup before cluster join),
+	// fall back to computing from memberlist
+	if currentLeader == "" {
+		members := c.memberlist.Members()
+		if len(members) == 0 {
+			return true // We're the only node
 		}
+
+		// Find node with smallest name (ID)
+		leaderName := c.nodeID
+		for _, member := range members {
+			if member.Name < leaderName {
+				leaderName = member.Name
+			}
+		}
+		return leaderName == c.nodeID
 	}
 
-	return leaderName == c.nodeID
+	return currentLeader == c.nodeID
 }
 
 // getCurrentLeader returns the current leader node ID
