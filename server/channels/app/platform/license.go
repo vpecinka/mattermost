@@ -19,6 +19,7 @@ import (
 	"github.com/mattermost/mattermost/server/v8/channels/jobs"
 	"github.com/mattermost/mattermost/server/v8/channels/store/sqlstore"
 	"github.com/mattermost/mattermost/server/v8/channels/utils"
+	"github.com/mattermost/mattermost/server/v8/custom"
 	"github.com/mattermost/mattermost/server/v8/einterfaces"
 )
 
@@ -43,7 +44,16 @@ func (ps *PlatformService) SetLicenseManager(impl einterfaces.LicenseInterface) 
 }
 
 func (ps *PlatformService) License() *model.License {
-	return ps.licenseValue.Load()
+	lic := ps.licenseValue.Load()
+
+	// SZN CUSTOM: Return mock Professional license with Seznam.cz custom features
+	// when no official license is installed. Configuration is centralized in
+	// server/custom/license.go - add new features there as you implement them.
+	if lic == nil {
+		return custom.GetCustomLicense()
+	}
+
+	return lic
 }
 
 func (ps *PlatformService) LoadLicense() {
@@ -304,6 +314,13 @@ func (ps *PlatformService) ClientLicense() map[string]string {
 	if clientLicense, _ := ps.clientLicenseValue.Load().(map[string]string); clientLicense != nil {
 		return clientLicense
 	}
+
+	// SZN CUSTOM: If no client license is cached, generate it from License()
+	// This ensures fake license is properly exposed to clients
+	if license := ps.License(); license != nil {
+		return utils.GetClientLicense(license)
+	}
+
 	return map[string]string{"IsLicensed": "false"}
 }
 

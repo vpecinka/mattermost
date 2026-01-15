@@ -83,7 +83,6 @@ export const isScheduledPostsEnabled: (a: GlobalState) => boolean = createSelect
     getConfig,
     getLicense,
     (config: Partial<ClientConfig>, license: ClientLicense): boolean => {
-        // SZN: Removed license check - scheduled posts work without enterprise license
-        return config.ScheduledPosts === 'true';
+        return config.ScheduledPosts === 'true' && license.IsLicensed === 'true';
     },
 );

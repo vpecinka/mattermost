@@ -160,9 +160,6 @@ func GenerateClientConfig(c *model.Config, telemetryID string, license *model.Li
 	props["YoutubeReferrerPolicy"] = strconv.FormatBool(*c.ExperimentalSettings.YoutubeReferrerPolicy)
 	props["UniqueEmojiReactionLimitPerPost"] = strconv.FormatInt(int64(*c.ServiceSettings.UniqueEmojiReactionLimitPerPost), 10)
 
-	// SZN: Moved ScheduledPosts outside license check - feature works without enterprise license
-	props["ScheduledPosts"] = strconv.FormatBool(*c.ServiceSettings.ScheduledPosts)
-
 	props["EnableAttributeBasedAccessControl"] = strconv.FormatBool(*c.AccessControlSettings.EnableAttributeBasedAccessControl)
 	props["EnableUserManagedAttributes"] = strconv.FormatBool(*c.AccessControlSettings.EnableUserManagedAttributes)
 	props["EnableAccessControlAuditLogging"] = strconv.FormatBool(*c.AccessControlSettings.EnableAccessControlAuditLogging)
@@ -241,7 +238,7 @@ func GenerateClientConfig(c *model.Config, telemetryID string, license *model.Li
 		if model.MinimumProfessionalLicense(license) {
 			props["EnableCustomGroups"] = strconv.FormatBool(*c.ServiceSettings.EnableCustomGroups)
 			props["PostAcknowledgements"] = "true"
-			// SZN: ScheduledPosts moved outside license check - already set above
+			props["ScheduledPosts"] = strconv.FormatBool(*c.ServiceSettings.ScheduledPosts)
 		}
 
 		if model.MinimumEnterpriseLicense(license) {

@@ -144,6 +144,9 @@ const ProductMenu = (): JSX.Element => {
         );
     });
 
+    // SZN: Always show free edition branding (with logo and badge) even when using custom license
+    const isFreeEdition = true;
+
     return (
         <div ref={menuRef}>
             <MenuWrapper

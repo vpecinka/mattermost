@@ -64,11 +64,10 @@ func requireScheduledPostsEnabled(c *Context) {
 		return
 	}
 
-	// SZN: Disabled license check for scheduled posts - feature is fully implemented in open source
-	// if c.App.Channels().License() == nil {
-	// 	c.Err = model.NewAppError("", "api.scheduled_posts.license_error", nil, "", http.StatusBadRequest)
-	// 	return
-	// }
+	if c.App.Channels().License() == nil {
+		c.Err = model.NewAppError("", "api.scheduled_posts.license_error", nil, "", http.StatusBadRequest)
+		return
+	}
 }
 
 func createSchedulePost(c *Context, w http.ResponseWriter, r *http.Request) {
