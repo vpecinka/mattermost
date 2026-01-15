@@ -49,6 +49,7 @@ func GetCustomLicense() *model.License {
 		"metrics",        // Custom metrics (sznmetrics/)
 		"cluster",        // Custom clustering (szncluster/)
 		"data_retention", // Scheduled posts support (SCHEDULED_POSTS.md)
+		"announcement",   // Announcement banner support
 		// Add more features here as you implement them:
 		// "compliance",
 		// "saml",
