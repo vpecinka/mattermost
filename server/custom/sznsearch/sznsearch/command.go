@@ -437,10 +437,12 @@ func (p *SznSearchCommandProvider) handleChannelReindex(a *app.App, rctx request
 	switch channel.Type {
 	case model.ChannelTypeOpen:
 		// Public channel: need channel admin permission
-		canReindex = canReindex || a.HasPermissionToChannel(rctx, args.UserId, channelID, model.PermissionManagePublicChannelProperties)
+		hasPermission, _ := a.HasPermissionToChannel(rctx, args.UserId, channelID, model.PermissionManagePublicChannelProperties)
+		canReindex = canReindex || hasPermission
 	case model.ChannelTypePrivate:
 		// Private channel: need channel admin permission
-		canReindex = canReindex || a.HasPermissionToChannel(rctx, args.UserId, channelID, model.PermissionManagePrivateChannelProperties)
+		hasPermission, _ := a.HasPermissionToChannel(rctx, args.UserId, channelID, model.PermissionManagePrivateChannelProperties)
+		canReindex = canReindex || hasPermission
 	case model.ChannelTypeDirect, model.ChannelTypeGroup:
 		// DM/GM: check if user is a member
 		_, memberErr := p.engine.Platform.Store.Channel().GetMember(rctx, channelID, args.UserId)
