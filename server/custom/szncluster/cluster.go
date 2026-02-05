@@ -304,17 +304,25 @@ func (c *SznCluster) StartInterNodeCommunication() {
 	isInitialLeader := c.lastKnownLeader == c.nodeID
 	c.leaderMu.Unlock()
 
+	memberCount := 0
+	if c.memberlist != nil {
+		memberCount = c.memberlist.NumMembers()
+	}
+
 	mlog.Info("SznCluster: Inter-node communication started successfully",
 		mlog.String("initial_leader", c.lastKnownLeader),
-		mlog.Bool("this_node_is_leader", isInitialLeader))
+		mlog.Bool("this_node_is_leader", isInitialLeader),
+		mlog.String("this_node_id", c.nodeID),
+		mlog.Int("member_count", memberCount))
 
 	// CRITICAL: If we are the leader on startup, invoke listeners immediately
 	// This ensures that jobs start on the leader node even when cluster starts
 	// without any leader changes. Without this, jobs would never start if the
 	// leader node starts and never loses leadership.
+	// IMPORTANT: Must run in goroutine to avoid deadlock during startup
 	if isInitialLeader {
 		mlog.Info("SznCluster: This node is initial leader, invoking listeners for job startup")
-		c.platform.InvokeClusterLeaderChangedListeners()
+		go c.platform.InvokeClusterLeaderChangedListeners()
 	}
 }
 
@@ -428,12 +436,13 @@ func (c *SznCluster) checkAndNotifyLeaderChange() {
 	c.leaderMu.Unlock()
 
 	// If leader changed, notify platform to invoke listeners
+	// IMPORTANT: Must run in goroutine to avoid deadlock when called from memberlist callbacks
 	if previousLeader != "" && previousLeader != currentLeader {
 		mlog.Info("SznCluster: Leader changed",
 			mlog.String("previous_leader", previousLeader),
 			mlog.String("new_leader", currentLeader),
 			mlog.Bool("this_node_is_leader", currentLeader == c.nodeID))
-		c.platform.InvokeClusterLeaderChangedListeners()
+		go c.platform.InvokeClusterLeaderChangedListeners()
 	}
 }
 

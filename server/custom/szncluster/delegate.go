@@ -130,9 +130,12 @@ func (e *clusterEvents) NotifyJoin(node *memberlist.Node) {
 		mlog.String("node_id", node.Name),
 		mlog.String("addr", node.Addr.String()))
 
-	// SZN: Check if leader changed after node join
+	// CRITICAL: Check if leader changed after node join
+	// Must run in goroutine to avoid deadlock - this callback runs from memberlist's
+	// internal goroutines while holding locks, and checkAndNotifyLeaderChange() calls
+	// memberlist.Members() which would deadlock.
 	if e.cluster != nil {
-		e.cluster.checkAndNotifyLeaderChange()
+		go e.cluster.checkAndNotifyLeaderChange()
 	}
 }
 
@@ -149,9 +152,10 @@ func (e *clusterEvents) NotifyLeave(node *memberlist.Node) {
 	// - Nodes that restart will use DB as seed list to rejoin
 	// The periodic cleanup job will remove stale DB entries after 30 minutes
 
-	// SZN: Check if leader changed after node left
+	// CRITICAL: Check if leader changed after node left
+	// Must run in goroutine to avoid deadlock - see NotifyJoin comment
 	if e.cluster != nil {
-		e.cluster.checkAndNotifyLeaderChange()
+		go e.cluster.checkAndNotifyLeaderChange()
 	}
 }
 
@@ -161,8 +165,9 @@ func (e *clusterEvents) NotifyUpdate(node *memberlist.Node) {
 		mlog.String("node_id", node.Name),
 		mlog.String("addr", node.Addr.String()))
 
-	// SZN: Check if leader changed after node update (shouldn't normally happen, but for safety)
+	// Check if leader changed after node update (shouldn't normally happen, but for safety)
+	// Must run in goroutine to avoid deadlock - see NotifyJoin comment
 	if e.cluster != nil {
-		e.cluster.checkAndNotifyLeaderChange()
+		go e.cluster.checkAndNotifyLeaderChange()
 	}
 }

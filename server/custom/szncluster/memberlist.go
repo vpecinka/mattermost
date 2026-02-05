@@ -109,8 +109,10 @@ func (c *SznCluster) initializeMemberlist() error {
 	mlConfig.DisableTcpPings = false
 
 	// Adjust timeouts for Docker/container environments
-	// Shorter timeouts for faster failure detection and recovery
-	mlConfig.TCPTimeout = 10 * time.Second
+	// TCPTimeout must be long enough for Push/Pull full state sync which can transfer large data
+	// In production with network latency/jitter, 10s can be too short and cause "i/o timeout" errors
+	// 30s provides safe margin while still detecting real failures reasonably fast
+	mlConfig.TCPTimeout = 30 * time.Second
 	mlConfig.ProbeTimeout = time.Duration(probeTimeoutSec) * time.Second
 	mlConfig.ProbeInterval = time.Duration(probeIntervalSec) * time.Second
 
@@ -151,7 +153,10 @@ func (c *SznCluster) initializeMemberlist() error {
 		mlog.String("bind_addr", mlConfig.BindAddr),
 		mlog.Int("bind_port", mlConfig.BindPort),
 		mlog.String("advertise_addr", mlConfig.AdvertiseAddr),
-		mlog.Int("advertise_port", mlConfig.AdvertisePort))
+		mlog.Int("advertise_port", mlConfig.AdvertisePort),
+		mlog.Bool("tcp_pings_enabled", !mlConfig.DisableTcpPings),
+		mlog.String("tcp_timeout", mlConfig.TCPTimeout.String()),
+		mlog.String("probe_timeout", mlConfig.ProbeTimeout.String()))
 
 	return nil
 }
