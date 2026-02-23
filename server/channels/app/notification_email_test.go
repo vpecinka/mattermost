@@ -1155,7 +1155,7 @@ func TestLandingLink(t *testing.T) {
 	}
 	sender := buildTestUser("test-sender-id", "sender", "sender", true)
 	team := buildTestTeam("test-team-id", "testteam", "testteam")
-	teamURL := "http://localhost:8065/landing#/testteam"
+	teamURL := "http://localhost:8065/landing#/_redirect"
 
 	storeMock := th.App.Srv().Store().(*mocks.Store)
 	teamStoreMock := mocks.TeamStore{}

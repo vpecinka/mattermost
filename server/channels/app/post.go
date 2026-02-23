@@ -2950,12 +2950,17 @@ func (a *App) CheckPostReminders(rctx request.CTX) {
 				continue
 			}
 
+			teamNameForLink := metadata.TeamName
+			if teamNameForLink == "" {
+				teamNameForLink = "_redirect"
+			}
+
 			T := i18n.GetUserTranslations(metadata.UserLocale)
 			dm := &model.Post{
 				ChannelId: ch.Id,
 				Message: T("app.post_reminder_dm", model.StringInterface{
 					"SiteURL":  siteURL,
-					"TeamName": metadata.TeamName,
+					"TeamName": teamNameForLink,
 					"PostId":   postID,
 					"Username": metadata.Username,
 				}),

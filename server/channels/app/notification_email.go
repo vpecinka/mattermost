@@ -105,7 +105,7 @@ func (a *App) buildEmailNotification(
 		}
 	}
 
-	landingURL := a.GetSiteURL() + "/landing#/" + team.Name
+	landingURL := a.GetSiteURL() + "/landing#/_redirect"
 	buttonURL := landingURL
 	if team.Name != "select_team" {
 		buttonURL = landingURL + "/pl/" + post.Id
