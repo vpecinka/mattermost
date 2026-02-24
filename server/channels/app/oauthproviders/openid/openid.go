@@ -34,13 +34,13 @@ func init() {
 	einterfaces.RegisterOAuthProvider(model.ServiceOpenid, provider)
 }
 
-func userFromOpenIDUser(logger mlog.LoggerIFace, oidcUser *OpenIDUser) *model.User {
+func userFromOpenIDUser(logger mlog.LoggerIFace, oidcUser *OpenIDUser, settings *model.SSOSettings) *model.User {
 	user := &model.User{}
 
-	// Use preferred_username if available, otherwise use email prefix
-	username := oidcUser.PreferredUsername
-	if username == "" && oidcUser.Email != "" {
-		username = strings.Split(oidcUser.Email, "@")[0]
+	// Use preferred_username only when explicitly enabled; otherwise use email prefix.
+	username := strings.Split(oidcUser.Email, "@")[0]
+	if settings != nil && model.SafeDereference(settings.UsePreferredUsername) && oidcUser.PreferredUsername != "" {
+		username = oidcUser.PreferredUsername
 	}
 	user.Username = model.CleanUsername(logger, username)
 
@@ -98,7 +98,7 @@ func (oidcUser *OpenIDUser) IsValid() error {
 	return nil
 }
 
-func (op *OpenIDProvider) GetUserFromJSON(rctx request.CTX, data io.Reader, tokenUser *model.User) (*model.User, error) {
+func (op *OpenIDProvider) GetUserFromJSON(rctx request.CTX, data io.Reader, tokenUser *model.User, settings *model.SSOSettings) (*model.User, error) {
 	oidcUser, err := openIDUserFromJSON(data)
 	if err != nil {
 		return nil, err
@@ -107,7 +107,7 @@ func (op *OpenIDProvider) GetUserFromJSON(rctx request.CTX, data io.Reader, toke
 		return nil, err
 	}
 
-	return userFromOpenIDUser(rctx.Logger(), oidcUser), nil
+	return userFromOpenIDUser(rctx.Logger(), oidcUser, settings), nil
 }
 
 func (op *OpenIDProvider) GetSSOSettings(_ request.CTX, config *model.Config, service string) (*model.SSOSettings, error) {
