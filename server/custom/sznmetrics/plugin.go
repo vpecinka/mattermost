@@ -95,3 +95,6 @@ func (m *SznMetrics) ObservePluginAPIDuration(pluginID, apiName string, success 
 		}).Observe(elapsed)
 	}
 }
+
+func (m *SznMetrics) ObservePluginWebappPerf(platform, agent, pluginID, pluginMetricLabel string, elapsed float64) {
+}
