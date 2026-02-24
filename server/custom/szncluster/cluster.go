@@ -129,6 +129,10 @@ const (
 
 	// discoveryUpdateIntervalSec is the interval in seconds for updating cluster discovery in DB
 	discoveryUpdateIntervalSec = 15
+
+	// seedReconcileIntervalSec is the interval in seconds for reconciling seed list from DB
+	// This enables automatic rejoin after long network partitions without process restart
+	seedReconcileIntervalSec = 60
 )
 
 // SznCluster implements einterfaces.ClusterInterface using Hashicorp Memberlist
@@ -292,6 +296,9 @@ func (c *SznCluster) StartInterNodeCommunication() {
 
 	// Start cluster discovery service
 	go c.startClusterDiscovery()
+
+	// Start periodic seed-list reconciliation for partition recovery
+	go c.startSeedReconciliation()
 
 	// Start periodic cleanup of deduplication cache
 	go c.startDeduplicationCleanup()
@@ -899,6 +906,62 @@ func (c *SznCluster) startClusterDiscovery() {
 			c.cleanupClusterDiscovery()
 			return
 		}
+	}
+}
+
+// startSeedReconciliation periodically attempts to rejoin nodes discovered from DB seed list.
+// This complements memberlist by handling long-lived split-brain scenarios where both sides
+// consider themselves single-node clusters and no membership events are generated anymore.
+func (c *SznCluster) startSeedReconciliation() {
+	ticker := time.NewTicker(seedReconcileIntervalSec * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			c.reconcileSeedList()
+		case <-c.shutdownCh:
+			return
+		}
+	}
+}
+
+// reconcileSeedList attempts to join peers from ClusterDiscovery when this node is isolated.
+// DB filtering (CDSOfflineAfterMillis) is applied by discoverNodes/GetAll.
+func (c *SznCluster) reconcileSeedList() {
+	if c.memberlist == nil {
+		return
+	}
+
+	// Only reconcile when isolated or effectively single-node.
+	// If we already have peers, avoid unnecessary join traffic.
+	if c.memberlist.NumMembers() > 1 {
+		return
+	}
+
+	nodes, err := c.discoverNodes()
+	if err != nil {
+		mlog.Warn("SznCluster: Seed reconciliation failed to discover nodes", mlog.Err(err))
+		return
+	}
+
+	if len(nodes) == 0 {
+		mlog.Debug("SznCluster: Seed reconciliation found no candidate nodes")
+		return
+	}
+
+	joined, err := c.memberlist.Join(nodes)
+	if err != nil {
+		mlog.Debug("SznCluster: Seed reconciliation join attempt failed",
+			mlog.Int("candidate_count", len(nodes)),
+			mlog.Err(err))
+		return
+	}
+
+	if joined > 0 {
+		mlog.Info("SznCluster: Seed reconciliation joined nodes",
+			mlog.Int("joined_count", joined),
+			mlog.Int("candidate_count", len(nodes)))
 	}
 }
 

@@ -24,6 +24,7 @@ SznCluster is a custom implementation of the Mattermost cluster interface, devel
 - **Zero Enterprise License Required** - Full clustering functionality using open-source components
 - **SWIM Gossip Protocol** - Scalable Weakly-consistent Infection-style Membership protocol via Hashicorp Memberlist
 - **Automatic Node Discovery** - Database-backed seed list for bootstrap with automatic cleanup (30-minute timeout)
+- **Periodic Seed Reconciliation** - Every 60s, isolated nodes retry join from DB seed list for post-partition recovery
 - **Self-Healing Cluster** - Memberlist automatic health probes (every 3s) with push/pull anti-entropy (every 20s)
 - **NodeID-Based Mapping** - Robust node identification survives IP/hostname changes (via discovery.Id)
 - **Database as Seed List** - DB discovery table provides bootstrap rendezvous point for new nodes
@@ -61,6 +62,7 @@ Main implementation of the ClusterInterface:
 - Message deduplication (30-second window, SHA256-based cache)
 - Leader election algorithm (lexicographic node ID)
 - Cluster discovery service (DB updates every 15s)
+- Periodic seed-list reconciliation (DB read every 60s when isolated)
 - Node lifecycle management
 - Handler registration and dispatch
 - Queue pruning and metrics logging
