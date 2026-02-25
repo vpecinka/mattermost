@@ -1200,5 +1200,6 @@ func (c *SznCluster) logQueueMetrics() {
 		mlog.Int("broadcast_queue_size", queueSize),
 		mlog.Int("dedup_cache_size", seenCount),
 		mlog.Int("cluster_members", memberCount),
+		mlog.Bool("is_leader", c.IsLeader()),
 		mlog.Int("health_score", c.HealthScore()))
 }
