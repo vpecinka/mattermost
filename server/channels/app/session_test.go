@@ -4,6 +4,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,9 +13,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/mattermost/mattermost/server/public/model"
+	storemocks "github.com/mattermost/mattermost/server/v8/channels/store/storetest/mocks"
 )
 
 func TestGetSessionIdleTimeoutInMinutes(t *testing.T) {
@@ -94,6 +97,27 @@ func TestGetSessionIdleTimeoutInMinutes(t *testing.T) {
 
 	_, err = th.App.GetSession(session.Token)
 	assert.Nil(t, err)
+}
+
+func TestGetSessionStoreFailureDoesNotFallBackToUserAccessToken(t *testing.T) {
+	mainHelper.Parallel(t)
+	th := SetupWithStoreMock(t)
+
+	mockStore := th.App.Srv().Store().(*storemocks.Store)
+	mockSessionStore := storemocks.SessionStore{}
+	mockSessionStore.On("Get", mock.Anything, "failing-session-token").Return(nil, errors.New("db unavailable"))
+	mockStore.On("Session").Return(&mockSessionStore)
+
+	mockUserAccessTokenStore := storemocks.UserAccessTokenStore{}
+	mockStore.On("UserAccessToken").Return(&mockUserAccessTokenStore).Maybe()
+
+	session, appErr := th.App.GetSession("failing-session-token")
+	require.Nil(t, session)
+	require.NotNil(t, appErr)
+	assert.Equal(t, "app.session.get.app_error", appErr.Id)
+	assert.Equal(t, http.StatusInternalServerError, appErr.StatusCode)
+
+	mockUserAccessTokenStore.AssertNotCalled(t, "GetByToken", mock.Anything)
 }
 
 func TestUpdateSessionOnPromoteDemote(t *testing.T) {

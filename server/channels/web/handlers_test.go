@@ -5,6 +5,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -619,6 +620,37 @@ func TestHandlerServeInvalidToken(t *testing.T) {
 			assert.Regexp(t, tc.ExpectedSetCookieHeaderRegexp, cookies)
 		})
 	}
+}
+
+func TestHandlerServeSessionBackendErrorDoesNotClearCookie(t *testing.T) {
+	th := SetupWithStoreMock(t)
+
+	mockStore := th.App.Srv().Store().(*mocks.Store)
+	mockSessionStore := mocks.SessionStore{}
+	mockSessionStore.On("Get", mock.Anything, "invalid").Return(nil, errors.New("db unavailable"))
+	mockStore.On("Session").Return(&mockSessionStore)
+
+	mockUserAccessTokenStore := mocks.UserAccessTokenStore{}
+	mockStore.On("UserAccessToken").Return(&mockUserAccessTokenStore).Maybe()
+
+	web := New(th.Server)
+	handler := Handler{
+		Srv:            web.srv,
+		HandleFunc:     handlerForCSRFToken,
+		RequireSession: true,
+		TrustRequester: false,
+		RequireMfa:     false,
+		IsStatic:       false,
+	}
+
+	request := httptest.NewRequest("GET", "/api/v4/test", nil)
+	request.AddCookie(&http.Cookie{Name: model.SessionCookieToken, Value: "invalid"})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusInternalServerError, response.Code)
+	assert.Empty(t, response.Header().Get("Set-Cookie"))
+	mockUserAccessTokenStore.AssertNotCalled(t, "GetByToken", mock.Anything)
 }
 
 func TestHandlerServeCSRFFailureClearsAuthCookie(t *testing.T) {

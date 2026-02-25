@@ -89,9 +89,17 @@ func (a *App) GetSession(token string) (*model.Session, *model.AppError) {
 	rctx := request.EmptyContext(a.Log())
 
 	var session *model.Session
-	// We intentionally skip the error check here, we only want to check if the token is valid.
-	// If we don't have the session we are going to create one with the token eventually.
-	if session, _ = a.ch.srv.platform.GetSession(rctx, token); session != nil {
+	session, err := a.ch.srv.platform.GetSession(rctx, token)
+	if err != nil {
+		var nfErr *store.ErrNotFound
+		if !errors.As(err, &nfErr) {
+			// SZN custom patch: during transient DB unavailability, report a server error
+			// instead of treating the token as invalid, which would force user logout.
+			return nil, model.NewAppError("GetSession", "app.session.get.app_error", map[string]any{"Token": token}, "", http.StatusInternalServerError).Wrap(err)
+		}
+	}
+
+	if session != nil {
 		if session.Token != token {
 			return nil, model.NewAppError("GetSession", "api.context.invalid_token.error", map[string]any{"Token": token, "Error": ""}, "session token is different from the one in DB", http.StatusUnauthorized)
 		}
@@ -107,7 +115,12 @@ func (a *App) GetSession(token string) (*model.Session, *model.AppError) {
 	if session == nil || session.Id == "" {
 		session, appErr = a.createSessionForUserAccessToken(rctx, token)
 		if appErr != nil {
-			return nil, model.NewAppError("GetSession", "api.context.invalid_token.error", map[string]any{"Token": token}, "", appErr.StatusCode).Wrap(appErr)
+			if appErr.StatusCode == http.StatusUnauthorized || appErr.StatusCode == http.StatusForbidden {
+				return nil, model.NewAppError("GetSession", "api.context.invalid_token.error", map[string]any{"Token": token}, "", appErr.StatusCode).Wrap(appErr)
+			}
+			// SZN custom patch: preserve active sessions during short backend failures by
+			// propagating server errors instead of mapping them to invalid-token responses.
+			return nil, model.NewAppError("GetSession", "app.session.get.app_error", map[string]any{"Token": token}, "", appErr.StatusCode).Wrap(appErr)
 		}
 	}
 
@@ -602,7 +615,12 @@ func (a *App) CreateUserAccessToken(rctx request.CTX, token *model.UserAccessTok
 func (a *App) createSessionForUserAccessToken(rctx request.CTX, tokenString string) (*model.Session, *model.AppError) {
 	token, nErr := a.Srv().Store().UserAccessToken().GetByToken(tokenString)
 	if nErr != nil {
-		return nil, model.NewAppError("createSessionForUserAccessToken", "app.user_access_token.invalid_or_missing", nil, "", http.StatusUnauthorized).Wrap(nErr)
+		var nfErr *store.ErrNotFound
+		if errors.As(nErr, &nfErr) {
+			return nil, model.NewAppError("createSessionForUserAccessToken", "app.user_access_token.invalid_or_missing", nil, "", http.StatusUnauthorized).Wrap(nErr)
+		}
+
+		return nil, model.NewAppError("createSessionForUserAccessToken", "app.session.get.app_error", nil, "", http.StatusServiceUnavailable).Wrap(nErr)
 	}
 
 	if !token.IsActive {

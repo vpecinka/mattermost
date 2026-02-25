@@ -269,10 +269,14 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if err != nil {
 			c.Logger.Info("Invalid session", mlog.Err(err))
-			if err.StatusCode == http.StatusInternalServerError {
+			// SZN custom patch: on transient DB/backend failures, return a server error
+			// and keep auth cookies intact to avoid unnecessary user logout.
+			if err.StatusCode >= http.StatusInternalServerError {
 				c.Err = err
 			} else if h.RequireSession {
-				c.RemoveSessionCookie(w, r)
+				if err.StatusCode == http.StatusUnauthorized || err.StatusCode == http.StatusForbidden {
+					c.RemoveSessionCookie(w, r)
+				}
 				c.Err = model.NewAppError("ServeHTTP", "api.context.session_expired.app_error", nil, "token="+token, http.StatusUnauthorized)
 			}
 		} else if !session.IsOAuth && tokenLocation == app.TokenLocationQueryString {
