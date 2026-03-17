@@ -57,18 +57,6 @@ func (ps *PlatformService) StartSearchEngine() (string, string) {
 			ps.esWatcher.reevaluate()
 		}
 
-		// Backfill was enabled but ES was already running (not starting fresh).
-		if startingBackfill && !startingES {
-			ps.Go(func() {
-				engine := ps.SearchEngine.ElasticsearchEngine
-				if engine == nil || !engine.IsActive() || !engine.IsIndexingEnabled() {
-					ps.Log().Warn("Elasticsearch not available for channel_type backfill")
-					return
-				}
-				ps.backfillPostsChannelType(engine)
-            }
-        }
-
 		// Handle SznSearch engine changes
 		if ps.SearchEngine.SznSearchEngine != nil && !*oldConfig.SznSearchSettings.EnableIndexing && *newConfig.SznSearchSettings.EnableIndexing {
 			ps.Go(func() {

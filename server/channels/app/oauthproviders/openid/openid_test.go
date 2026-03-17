@@ -37,12 +37,11 @@ func TestOpenIDUserFromJSON(t *testing.T) {
 		EmailVerified:     true,
 	}
 
-	t.Run("valid openid user with preferred username enabled", func(t *testing.T) {
+	t.Run("valid openid user with preferred username", func(t *testing.T) {
 		b, err := json.Marshal(validUser)
 		require.NoError(t, err)
 
-		settings := &model.SSOSettings{UsePreferredUsername: model.NewPointer(true)}
-		user, err := provider.GetUserFromJSON(rctx, bytes.NewReader(b), nil, settings)
+		user, err := provider.GetUserFromJSON(rctx, bytes.NewReader(b), nil)
 		require.NoError(t, err)
 
 		require.NotNil(t, user)
@@ -53,41 +52,39 @@ func TestOpenIDUserFromJSON(t *testing.T) {
 		assert.Equal(t, model.ServiceOpenid, user.AuthService)
 	})
 
-	t.Run("valid openid user with preferred username disabled", func(t *testing.T) {
-		b, err := json.Marshal(validUser)
+	t.Run("valid openid user without preferred username", func(t *testing.T) {
+		noPreferred := validUser
+		noPreferred.PreferredUsername = ""
+
+		b, err := json.Marshal(noPreferred)
 		require.NoError(t, err)
 
-		settings := &model.SSOSettings{UsePreferredUsername: model.NewPointer(false)}
-		user, err := provider.GetUserFromJSON(rctx, bytes.NewReader(b), nil, settings)
+		user, err := provider.GetUserFromJSON(rctx, bytes.NewReader(b), nil)
 		require.NoError(t, err)
 
 		require.NotNil(t, user)
 		assert.Equal(t, "preferred", user.Username)
-		assert.Equal(t, "preferred@example.com", user.Email)
-		require.NotNil(t, user.AuthData)
-		assert.Equal(t, validUser.Sub, *user.AuthData)
-		assert.Equal(t, model.ServiceOpenid, user.AuthService)
 	})
 
-	t.Run("valid openid user with nil settings", func(t *testing.T) {
+	t.Run("valid openid user default behavior", func(t *testing.T) {
 		b, err := json.Marshal(validUser)
 		require.NoError(t, err)
 
-		user, err := provider.GetUserFromJSON(rctx, bytes.NewReader(b), nil, nil)
+		user, err := provider.GetUserFromJSON(rctx, bytes.NewReader(b), nil)
 		require.NoError(t, err)
 
 		require.NotNil(t, user)
-		assert.Equal(t, "preferred", user.Username)
+		assert.Equal(t, "preferred.user", user.Username)
 	})
 
 	t.Run("empty body should fail validation", func(t *testing.T) {
-		_, err := provider.GetUserFromJSON(rctx, strings.NewReader("{}"), nil, nil)
+		_, err := provider.GetUserFromJSON(rctx, strings.NewReader("{}"), nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "user 'sub' claim is required")
 	})
 
 	t.Run("invalid json", func(t *testing.T) {
-		_, err := provider.GetUserFromJSON(rctx, strings.NewReader("invalid json"), nil, nil)
+		_, err := provider.GetUserFromJSON(rctx, strings.NewReader("invalid json"), nil)
 		require.Error(t, err)
 	})
 }
@@ -96,17 +93,16 @@ func TestUserFromOpenIDUser(t *testing.T) {
 	logger := mlog.CreateConsoleTestLogger(t)
 
 	testCases := []struct {
-		description          string
-		oidcUser             OpenIDUser
-		usePreferredUsername bool
-		expectedUsername     string
-		expectedFirstName    string
-		expectedLastName     string
-		expectedEmail        string
-		expectedAuthData     string
+		description       string
+		oidcUser          OpenIDUser
+		expectedUsername  string
+		expectedFirstName string
+		expectedLastName  string
+		expectedEmail     string
+		expectedAuthData  string
 	}{
 		{
-			description: "Username from PreferredUsername when UsePreferredUsername=true",
+			description: "Username from PreferredUsername when present",
 			oidcUser: OpenIDUser{
 				Sub:               "1",
 				PreferredUsername: "preferred.user",
@@ -114,50 +110,45 @@ func TestUserFromOpenIDUser(t *testing.T) {
 				FamilyName:        "Last",
 				Email:             "TEST@EXAMPLE.COM",
 			},
-			usePreferredUsername: true,
-			expectedUsername:     "preferred.user",
-			expectedFirstName:    "First",
-			expectedLastName:     "Last",
-			expectedEmail:        "test@example.com",
-			expectedAuthData:     "1",
+			expectedUsername:  "preferred.user",
+			expectedFirstName: "First",
+			expectedLastName:  "Last",
+			expectedEmail:     "test@example.com",
+			expectedAuthData:  "1",
 		},
 		{
-			description: "Username from Email when UsePreferredUsername=false",
+			description: "Username from Email when PreferredUsername is empty",
 			oidcUser: OpenIDUser{
-				Sub:               "2",
-				PreferredUsername: "preferred.user",
-				GivenName:         "First",
-				FamilyName:        "Last",
-				Email:             "some.user@example.com",
+				Sub:        "2",
+				GivenName:  "First",
+				FamilyName: "Last",
+				Email:      "some.user@example.com",
 			},
-			usePreferredUsername: false,
-			expectedUsername:     "some.user",
-			expectedFirstName:    "First",
-			expectedLastName:     "Last",
-			expectedEmail:        "some.user@example.com",
-			expectedAuthData:     "2",
+			expectedUsername:  "some.user",
+			expectedFirstName: "First",
+			expectedLastName:  "Last",
+			expectedEmail:     "some.user@example.com",
+			expectedAuthData:  "2",
 		},
 		{
-			description: "Username needing cleaning when preferred username enabled",
+			description: "Username needing cleaning from preferred username",
 			oidcUser: OpenIDUser{
 				Sub:               "3",
 				PreferredUsername: "preferred@@user!!",
 				Name:              "Given Family",
 				Email:             "user@example.com",
 			},
-			usePreferredUsername: true,
-			expectedUsername:     "preferred--user",
-			expectedFirstName:    "Given",
-			expectedLastName:     "Family",
-			expectedEmail:        "user@example.com",
-			expectedAuthData:     "3",
+			expectedUsername:  "preferred--user",
+			expectedFirstName: "Given",
+			expectedLastName:  "Family",
+			expectedEmail:     "user@example.com",
+			expectedAuthData:  "3",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
-			settings := &model.SSOSettings{UsePreferredUsername: model.NewPointer(tc.usePreferredUsername)}
-			user := userFromOpenIDUser(logger, &tc.oidcUser, settings)
+			user := userFromOpenIDUser(logger, &tc.oidcUser)
 
 			require.NotNil(t, user)
 			assert.Equal(t, tc.expectedUsername, user.Username)
