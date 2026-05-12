@@ -22,6 +22,7 @@ echo -e "${BLUE}Plugins: ${PLUGIN_PACKAGES}${NC}"
 echo -e "\n${YELLOW}===== BUILDING WEBAPP ================${NC}\n"
 cd webapp
 . ~/.nvm/nvm.sh
+nvm use v24
 make dist
 
 echo -e "\n${YELLOW}===== BUILDING SERVER ================${NC}\n"
