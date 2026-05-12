@@ -451,7 +451,7 @@ func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID strin
 
 			// Index post message if mode requires it
 			if mode == common.ReindexModePostsOnly || mode == common.ReindexModeWithFiles {
-				msg, appErr := s.formatPostForIndex(post)
+				msg, appErr := s.formatPostForIndex(post, "")
 				if appErr != nil {
 					rctx.Logger().Error("SznSearch: Failed to format post for reindex",
 						mlog.String("post_id", post.Id),

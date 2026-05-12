@@ -31,7 +31,7 @@ import (
 )
 
 // IndexPost indexes a post in ElasticSearch
-func (s *SznSearchImpl) IndexPost(post *model.Post, teamId string) *model.AppError {
+func (s *SznSearchImpl) IndexPost(post *model.Post, teamId string, channelType string) *model.AppError {
 	if !s.IsActive() {
 		return nil // Not an error if not started
 	}
@@ -52,7 +52,7 @@ func (s *SznSearchImpl) IndexPost(post *model.Post, teamId string) *model.AppErr
 		mlog.String("user_id", post.UserId),
 	)
 
-	msg, err := s.formatPostForIndex(post)
+	msg, err := s.formatPostForIndex(post, channelType)
 	if err != nil {
 		s.Platform.Log().Error("SznSearch: Failed to format post for indexing",
 			mlog.String("post_id", post.Id),
@@ -75,6 +75,32 @@ func (s *SznSearchImpl) IndexPost(post *model.Post, teamId string) *model.AppErr
 	s.mutex.WLock(common.MutexMessageQueue)
 	s.messageQueue[post.Id] = msg
 	s.mutex.WUnlock(common.MutexMessageQueue)
+	return nil
+}
+
+func (s *SznSearchImpl) UpdatePostsChannelTypeByChannelId(rctx request.CTX, channelID string, channelType string) *model.AppError {
+	if !s.IsActive() {
+		return nil
+	}
+
+	rctx.Logger().Debug("SznSearch: skipping post channel_type update by channel",
+		mlog.String("channel_id", channelID),
+		mlog.String("channel_type", channelType),
+	)
+
+	return nil
+}
+
+func (s *SznSearchImpl) BackfillPostsChannelType(rctx request.CTX, channelIDs []string, channelType string) *model.AppError {
+	if !s.IsActive() {
+		return nil
+	}
+
+	rctx.Logger().Debug("SznSearch: skipping post channel_type backfill",
+		mlog.Int("channel_count", len(channelIDs)),
+		mlog.String("channel_type", channelType),
+	)
+
 	return nil
 }
 
@@ -273,7 +299,7 @@ func (s *SznSearchImpl) DeleteUserPosts(rctx request.CTX, userID string) *model.
 }
 
 // formatPostForIndex converts a post to IndexedMessage format
-func (s *SznSearchImpl) formatPostForIndex(post *model.Post) (*common.IndexedMessage, *model.AppError) {
+func (s *SznSearchImpl) formatPostForIndex(post *model.Post, channelType string) (*common.IndexedMessage, *model.AppError) {
 	// Get channel to determine type and members
 	channel, err := s.Platform.Store.Channel().Get(post.ChannelId, true)
 	if err != nil {
@@ -285,7 +311,10 @@ func (s *SznSearchImpl) formatPostForIndex(post *model.Post) (*common.IndexedMes
 		return nil, model.NewAppError("SznSearch.formatPostForIndex", "sznsearch.format_post.get_channel", nil, err.Error(), http.StatusInternalServerError)
 	}
 
-	channelType := common.GetChannelTypeInt(string(channel.Type))
+	indexedChannelType := common.GetChannelTypeInt(string(channel.Type))
+	if channelType != "" {
+		indexedChannelType = common.GetChannelTypeInt(channelType)
+	}
 	teamID := channel.TeamId
 	if teamID == "" {
 		teamID = common.NoTeamID
@@ -332,7 +361,7 @@ func (s *SznSearchImpl) formatPostForIndex(post *model.Post) (*common.IndexedMes
 		Hashtags:    hashtags,
 		CreatedAt:   post.CreateAt,
 		ChannelID:   post.ChannelId,
-		ChannelType: channelType,
+		ChannelType: indexedChannelType,
 		TeamID:      teamID,
 		UserID:      post.UserId,
 		Members:     members,

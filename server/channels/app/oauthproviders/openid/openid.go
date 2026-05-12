@@ -18,6 +18,8 @@ import (
 type OpenIDProvider struct {
 }
 
+var _ einterfaces.OAuthProvider = (*OpenIDProvider)(nil)
+
 // OpenIDUser represents the user info from OpenID Connect /userinfo endpoint
 type OpenIDUser struct {
 	Sub               string `json:"sub"`                // Subject - unique identifier
@@ -98,7 +100,7 @@ func (oidcUser *OpenIDUser) IsValid() error {
 	return nil
 }
 
-func (op *OpenIDProvider) GetUserFromJSON(rctx request.CTX, data io.Reader, tokenUser *model.User) (*model.User, error) {
+func (op *OpenIDProvider) GetUserFromJSON(rctx request.CTX, data io.Reader, tokenUser *model.User, _ *model.SSOSettings) (*model.User, error) {
 	oidcUser, err := openIDUserFromJSON(data)
 	if err != nil {
 		return nil, err

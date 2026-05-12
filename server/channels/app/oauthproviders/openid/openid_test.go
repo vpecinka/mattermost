@@ -41,7 +41,7 @@ func TestOpenIDUserFromJSON(t *testing.T) {
 		b, err := json.Marshal(validUser)
 		require.NoError(t, err)
 
-		user, err := provider.GetUserFromJSON(rctx, bytes.NewReader(b), nil)
+		user, err := provider.GetUserFromJSON(rctx, bytes.NewReader(b), nil, nil)
 		require.NoError(t, err)
 
 		require.NotNil(t, user)
@@ -59,7 +59,7 @@ func TestOpenIDUserFromJSON(t *testing.T) {
 		b, err := json.Marshal(noPreferred)
 		require.NoError(t, err)
 
-		user, err := provider.GetUserFromJSON(rctx, bytes.NewReader(b), nil)
+		user, err := provider.GetUserFromJSON(rctx, bytes.NewReader(b), nil, nil)
 		require.NoError(t, err)
 
 		require.NotNil(t, user)
@@ -70,7 +70,7 @@ func TestOpenIDUserFromJSON(t *testing.T) {
 		b, err := json.Marshal(validUser)
 		require.NoError(t, err)
 
-		user, err := provider.GetUserFromJSON(rctx, bytes.NewReader(b), nil)
+		user, err := provider.GetUserFromJSON(rctx, bytes.NewReader(b), nil, nil)
 		require.NoError(t, err)
 
 		require.NotNil(t, user)
@@ -78,13 +78,13 @@ func TestOpenIDUserFromJSON(t *testing.T) {
 	})
 
 	t.Run("empty body should fail validation", func(t *testing.T) {
-		_, err := provider.GetUserFromJSON(rctx, strings.NewReader("{}"), nil)
+		_, err := provider.GetUserFromJSON(rctx, strings.NewReader("{}"), nil, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "user 'sub' claim is required")
 	})
 
 	t.Run("invalid json", func(t *testing.T) {
-		_, err := provider.GetUserFromJSON(rctx, strings.NewReader("invalid json"), nil)
+		_, err := provider.GetUserFromJSON(rctx, strings.NewReader("invalid json"), nil, nil)
 		require.Error(t, err)
 	})
 }
