@@ -45,7 +45,8 @@ func (ps *PlatformService) StartSearchEngine() (string, string) {
 				model.SafeDereference(oldESCfg.Username) != model.SafeDereference(newESCfg.Username) ||
 				model.SafeDereference(oldESCfg.Password) != model.SafeDereference(newESCfg.Password) ||
 				model.SafeDereference(oldESCfg.Sniff) != model.SafeDereference(newESCfg.Sniff))
-		startingBackfill := !model.SafeDereference(oldESCfg.EnableSearchPublicChannelsWithoutMembership) &&
+		startingBackfill := ps.SearchEngine.ElasticsearchEngine != nil &&
+			!model.SafeDereference(oldESCfg.EnableSearchPublicChannelsWithoutMembership) &&
 			model.SafeDereference(newESCfg.EnableSearchPublicChannelsWithoutMembership)
 
 		if connectionChanged {
@@ -55,6 +56,15 @@ func (ps *PlatformService) StartSearchEngine() (string, string) {
 			ps.esWatcher.requestRestart()
 		} else if startingES || stoppingES {
 			ps.esWatcher.reevaluate()
+		} else if startingBackfill {
+			if ps.SearchEngine.ElasticsearchEngine.IsActive() {
+				engine := ps.SearchEngine.ElasticsearchEngine
+				ps.Go(func() {
+					ps.backfillPostsChannelType(engine)
+				})
+			} else {
+				ps.esWatcher.reevaluate()
+			}
 		}
 
 		// Handle SznSearch engine changes
