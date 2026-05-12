@@ -111,7 +111,7 @@ describe('RhsSearchPopout', () => {
         await waitFor(() => {
             expect(jest.mocked(updateSearchType)).toHaveBeenCalledWith('messages');
             expect(jest.mocked(updateSearchTerms)).toHaveBeenCalledWith('hello world');
-            expect(jest.mocked(updateSearchTeam)).toHaveBeenCalledWith(team.id);
+            expect(jest.mocked(updateSearchTeam)).toHaveBeenCalledWith('');
             expect(jest.mocked(showSearchResults)).toHaveBeenCalledWith(false);
         });
     });
@@ -167,7 +167,7 @@ describe('RhsSearchPopout', () => {
         });
     });
 
-    test('should resolve searchTeamId from query params with fallback to current team', async () => {
+    test('should resolve searchTeamId from query params with fallback to all teams', async () => {
         renderPopout('?q=test&type=messages&mode=search&searchTeamId=other-team');
         await waitFor(() => {
             expect(jest.mocked(updateSearchTeam)).toHaveBeenCalledWith('other-team');
@@ -182,7 +182,7 @@ describe('RhsSearchPopout', () => {
         jest.clearAllMocks();
         renderPopout('?q=test&type=messages&mode=search');
         await waitFor(() => {
-            expect(jest.mocked(updateSearchTeam)).toHaveBeenCalledWith(team.id);
+            expect(jest.mocked(updateSearchTeam)).toHaveBeenCalledWith('');
         });
     });
 

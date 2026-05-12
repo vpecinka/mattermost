@@ -71,7 +71,7 @@ export default function RhsSearchPopout() {
 
         dispatch(updateSearchType(query.searchType));
         dispatch(updateSearchTerms(query.searchTerms));
-        dispatch(updateSearchTeam(query.searchTeamId ?? teamId));
+        dispatch(updateSearchTeam(query.searchTeamId ?? ''));
 
         switch (query.mode) {
         case RHSStates.CHANNEL_FILES:
