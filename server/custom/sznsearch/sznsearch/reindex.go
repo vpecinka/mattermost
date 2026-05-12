@@ -483,7 +483,7 @@ func (s *SznSearchImpl) reindexChannelInternal(rctx request.CTX, channelID strin
 
 		// Index files in batch
 		if len(fileIDs) > 0 {
-			files, fileErr := s.Platform.Store.FileInfo().GetByIds(fileIDs, false, true)
+			files, fileErr := s.Platform.Store.FileInfo().GetByIds(fileIDs, false, true, false)
 			if fileErr != nil {
 				rctx.Logger().Error("SznSearch: Failed to get files by IDs during reindex",
 					mlog.String("channel_id", channelID),
