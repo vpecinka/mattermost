@@ -4,6 +4,8 @@
 package platform
 
 import (
+	"context"
+
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/shared/mlog"
 )
@@ -17,7 +19,7 @@ func (ps *PlatformService) StartSearchEngine() (string, string) {
 	// Start SznSearch engine (no license required)
 	if ps.SearchEngine.SznSearchEngine != nil && ps.SearchEngine.SznSearchEngine.IsEnabled() {
 		ps.Go(func() {
-			if err := ps.SearchEngine.SznSearchEngine.Start(); err != nil {
+			if err := ps.SearchEngine.SznSearchEngine.Start(context.Background()); err != nil {
 				ps.Log().Error("Failed to start SznSearch engine", mlog.Err(err))
 			}
 		})
@@ -70,7 +72,7 @@ func (ps *PlatformService) StartSearchEngine() (string, string) {
 		// Handle SznSearch engine changes
 		if ps.SearchEngine.SznSearchEngine != nil && !*oldConfig.SznSearchSettings.EnableIndexing && *newConfig.SznSearchSettings.EnableIndexing {
 			ps.Go(func() {
-				if err := ps.SearchEngine.SznSearchEngine.Start(); err != nil {
+				if err := ps.SearchEngine.SznSearchEngine.Start(context.Background()); err != nil {
 					ps.Log().Error("Failed to start SznSearch engine", mlog.Err(err))
 				}
 			})
@@ -86,7 +88,7 @@ func (ps *PlatformService) StartSearchEngine() (string, string) {
 					if err := ps.SearchEngine.SznSearchEngine.Stop(); err != nil {
 						ps.Log().Error("Failed to stop SznSearch engine", mlog.Err(err))
 					}
-					if err := ps.SearchEngine.SznSearchEngine.Start(); err != nil {
+					if err := ps.SearchEngine.SznSearchEngine.Start(context.Background()); err != nil {
 						ps.Log().Error("Failed to start SznSearch engine", mlog.Err(err))
 					}
 				}

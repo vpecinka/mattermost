@@ -16,6 +16,7 @@
 package sznsearch
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -32,8 +33,10 @@ import (
 	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/shared/mlog"
+	"github.com/mattermost/mattermost/server/public/shared/request"
 	"github.com/mattermost/mattermost/server/v8/channels/app/platform"
 	"github.com/mattermost/mattermost/server/v8/custom/sznsearch/common"
+	"github.com/mattermost/mattermost/server/v8/platform/services/searchengine"
 )
 
 // SznSearchImpl implements searchengine.SearchEngineInterface for Seznam Search (ElasticSearch)
@@ -42,6 +45,7 @@ type SznSearchImpl struct {
 
 	client         *elasticsearch.Client
 	ready          int32 // 0=stopped, 1=running (health tracked by circuitBreaker)
+	healthy        int32 // 0=unhealthy, 1=healthy
 	circuitBreaker *common.CircuitBreaker
 	version        int
 	fullVersion    string
@@ -64,6 +68,8 @@ type SznSearchImpl struct {
 	reindexPoolSize int                 // Number of concurrent goroutines for channel reindex
 }
 
+var _ searchengine.SearchEngineInterface = (*SznSearchImpl)(nil)
+
 // UpdateConfig updates the engine configuration
 func (*SznSearchImpl) UpdateConfig(cfg *model.Config) {
 	// Configuration is accessed via Platform.Config() which is always current
@@ -84,6 +90,19 @@ func (s *SznSearchImpl) IsActive() bool {
 	return atomic.LoadInt32(&s.ready) > 0
 }
 
+func (s *SznSearchImpl) IsHealthy() bool {
+	return atomic.LoadInt32(&s.healthy) > 0
+}
+
+func (s *SznSearchImpl) SetHealthy(healthy bool) {
+	if healthy {
+		atomic.StoreInt32(&s.healthy, 1)
+		return
+	}
+
+	atomic.StoreInt32(&s.healthy, 0)
+}
+
 // IsIndexingEnabled checks if indexing is enabled
 func (s *SznSearchImpl) IsIndexingEnabled() bool {
 	return atomic.LoadInt32(&s.ready) > 0 && *s.Platform.Config().SznSearchSettings.EnableIndexing
@@ -96,7 +115,7 @@ func (s *SznSearchImpl) IsSearchEnabled() bool {
 
 // isBackendHealthy checks if ES backend is available via circuit breaker
 func (s *SznSearchImpl) isBackendHealthy() bool {
-	return atomic.LoadInt32(&s.ready) == 1 && s.circuitBreaker.AllowRequest()
+	return atomic.LoadInt32(&s.ready) == 1 && s.IsHealthy() && s.circuitBreaker.AllowRequest()
 }
 
 // IsIndexingSync returns true if indexing should be synchronous
@@ -324,9 +343,28 @@ func (s *SznSearchImpl) createClient() (*elasticsearch.Client, error) {
 	return client, nil
 }
 
+func (s *SznSearchImpl) HealthCheck(_ request.CTX) *model.AppError {
+	if !s.IsActive() || s.client == nil {
+		return model.NewAppError("SznSearch.HealthCheck", "sznsearch.healthcheck.not_started", nil, "Search engine is not started", http.StatusInternalServerError)
+	}
+
+	res, err := s.client.Info()
+	if err != nil {
+		return model.NewAppError("SznSearch.HealthCheck", "sznsearch.healthcheck.unreachable", nil, err.Error(), http.StatusBadGateway)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return model.NewAppError("SznSearch.HealthCheck", "sznsearch.healthcheck.error", nil, res.String(), res.StatusCode)
+	}
+
+	return nil
+}
+
 // Start initializes and starts the SznSearch engine
-func (s *SznSearchImpl) Start() *model.AppError {
+func (s *SznSearchImpl) Start(_ context.Context) *model.AppError {
 	s.Platform.Log().Debug("SznSearch: Starting engine initialization")
+	s.SetHealthy(false)
 
 	// Check if indexing is enabled in config (no license required for custom implementation)
 	if !*s.Platform.Config().SznSearchSettings.EnableIndexing {
@@ -431,6 +469,7 @@ func (s *SznSearchImpl) Start() *model.AppError {
 		} else {
 			s.Platform.Log().Info("SznSearch: Indices verified successfully - marking circuit breaker as healthy")
 			s.circuitBreaker.RecordSuccess()
+			s.SetHealthy(true)
 		}
 	}
 
@@ -460,6 +499,7 @@ func (s *SznSearchImpl) Stop() *model.AppError {
 	close(s.stopChan)
 
 	atomic.StoreInt32(&s.ready, 0)
+	s.SetHealthy(false)
 
 	s.Platform.Log().Info("SznSearch engine stopped")
 
