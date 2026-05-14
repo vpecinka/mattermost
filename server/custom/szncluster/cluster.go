@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -260,6 +261,7 @@ func NewSznCluster(ps *platform.PlatformService) einterfaces.ClusterInterface {
 	advertiseAddress := cluster.getAdvertiseAddress()
 	gossipPort := *cfg.ClusterSettings.GossipPort
 	cluster.nodeID = generatePersistentNodeID(advertiseAddress, gossipPort)
+	cluster.handlers[model.ClusterGossipEventRequestSaveConfig] = cluster.handleSaveConfigMessage
 
 	return cluster
 }
@@ -271,6 +273,11 @@ func (c *SznCluster) StartInterNodeCommunication() {
 
 	if c.started {
 		mlog.Warn("SznCluster: Inter-node communication already started")
+		return
+	}
+
+	if c.platform.Config().ClusterSettings.Enable == nil || !*c.platform.Config().ClusterSettings.Enable {
+		mlog.Debug("SznCluster: Inter-node communication disabled by config")
 		return
 	}
 
@@ -842,14 +849,43 @@ func (c *SznCluster) ConfigChanged(previousConfig *model.Config, newConfig *mode
 
 	mlog.Debug("SznCluster: Config changed, notifying cluster")
 
+	data, err := json.Marshal(newConfig)
+	if err != nil {
+		return model.NewAppError("SznCluster.ConfigChanged", "cluster.serialize_config_failed", nil, err.Error(), 500)
+	}
+
 	// Broadcast config change event
 	msg := &model.ClusterMessage{
 		Event:    model.ClusterGossipEventRequestSaveConfig,
 		SendType: model.ClusterSendReliable,
+		Data:     data,
 	}
 
 	c.SendClusterMessage(msg)
 	return nil
+}
+
+func (c *SznCluster) handleSaveConfigMessage(msg *model.ClusterMessage) {
+	if len(msg.Data) == 0 {
+		mlog.Warn("SznCluster: Received empty config payload")
+		return
+	}
+
+	mlog.Info("SznCluster: Received config change message, skipping config apply",
+		mlog.Int("payload_bytes", len(msg.Data)))
+
+	// var newConfig model.Config
+	// if err := json.Unmarshal(msg.Data, &newConfig); err != nil {
+	// 	mlog.Error("SznCluster: Failed to deserialize config payload", mlog.Err(err))
+	// 	return
+	// }
+
+	// if _, _, appErr := c.platform.SaveConfig(&newConfig, false); appErr != nil {
+	// 	mlog.Error("SznCluster: Failed to apply config from cluster message", mlog.Err(appErr))
+	// 	return
+	// }
+
+	// mlog.Info("SznCluster: Applied config received from cluster")
 }
 
 // WebConnCountForUser returns the number of web connections for a user
@@ -1019,11 +1055,16 @@ func (c *SznCluster) updateClusterDiscovery(clusterName string) {
 // cleanupClusterDiscovery removes this node's entry from cluster discovery table
 func (c *SznCluster) cleanupClusterDiscovery() {
 	advertiseAddress := c.getAdvertiseAddress()
+	clusterName := ""
+	if cfg := c.platform.Config(); cfg.ClusterSettings.ClusterName != nil {
+		clusterName = *cfg.ClusterSettings.ClusterName
+	}
 
 	discovery := &model.ClusterDiscovery{
-		Id:       c.nodeID, // Use nodeID for proper identification
-		Type:     model.CDSTypeApp,
-		Hostname: advertiseAddress,
+		Id:          c.nodeID, // Use nodeID for proper identification
+		ClusterName: clusterName,
+		Type:        model.CDSTypeApp,
+		Hostname:    advertiseAddress,
 	}
 
 	if _, err := c.platform.Store.ClusterDiscovery().Delete(discovery); err != nil {
@@ -1078,6 +1119,25 @@ func (c *SznCluster) sendToAllNodes(data []byte) {
 func (c *SznCluster) messageHash(msg *model.ClusterMessage) string {
 	h := sha256.New()
 	h.Write([]byte(msg.Event))
+	h.Write([]byte{0})
+	h.Write([]byte(msg.SendType))
+	h.Write([]byte{0})
+
+	if len(msg.Props) > 0 {
+		keys := make([]string, 0, len(msg.Props))
+		for key := range msg.Props {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+
+		for _, key := range keys {
+			h.Write([]byte(key))
+			h.Write([]byte{0})
+			h.Write([]byte(msg.Props[key]))
+			h.Write([]byte{0})
+		}
+	}
+
 	h.Write(msg.Data)
 	return hex.EncodeToString(h.Sum(nil))
 }
