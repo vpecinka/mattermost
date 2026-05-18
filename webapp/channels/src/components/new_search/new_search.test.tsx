@@ -21,6 +21,10 @@ jest.mock('react-redux', () => ({
 }));
 
 describe('components/new_search/NewSearch', () => {
+    beforeEach(() => {
+        mockDispatch.mockClear();
+    });
+
     test('should open the search box on click search', async () => {
         renderWithContext(<NewSearch/>);
         expect(screen.queryByText('Messages')).not.toBeInTheDocument();
@@ -89,6 +93,24 @@ describe('components/new_search/NewSearch', () => {
         expect(mockDispatch).toHaveBeenCalledWith({terms: '', type: 'UPDATE_RHS_SEARCH_TERMS'});
         expect(mockDispatch).toHaveBeenCalledWith({teamId: '', type: 'UPDATE_RHS_SEARCH_TEAM'});
         expect(mockDispatch).toHaveBeenCalledTimes(4);
+    });
+
+    test('should fall back to the current team when submitting an in: search from all teams', async () => {
+        renderWithContext(
+            <NewSearch/>,
+            {
+                entities: {
+                    teams: {
+                        currentTeamId: 'team-id',
+                    },
+                },
+            },
+        );
+
+        await userEvent.click(screen.getByText('Search'));
+        await userEvent.type(screen.getByPlaceholderText('Search messages'), 'in:town-square{enter}');
+
+        expect(mockDispatch).toHaveBeenCalledWith({teamId: 'team-id', type: 'UPDATE_RHS_SEARCH_TEAM'});
     });
 
     test('should open the search ctrl+shift+f is press on web app', async () => {

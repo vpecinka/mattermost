@@ -5,9 +5,10 @@ import React, {useState, useRef, forwardRef, useCallback, useEffect} from 'react
 import {useIntl} from 'react-intl';
 import styled from 'styled-components';
 
+import type {Channel} from '@mattermost/types/channels';
 import type {Team} from '@mattermost/types/teams';
 
-import {hasResults} from 'components/suggestion/suggestion_results';
+import {getItemForTerm, hasResults} from 'components/suggestion/suggestion_results';
 
 import Constants from 'utils/constants';
 import * as Keyboard from 'utils/keyboard';
@@ -74,6 +75,19 @@ const SearchBoxHeader = styled.div`
 const SearchTeamSelector = styled.div`
     margin: 20px 65px 0 0;
 `;
+
+function getSuggestedTeamId(item: unknown, searchTeam: string) {
+    if (searchTeam || !item || typeof item !== 'object') {
+        return searchTeam;
+    }
+
+    const channel = item as Partial<Channel>;
+    if ((channel.type === Constants.OPEN_CHANNEL || channel.type === Constants.PRIVATE_CHANNEL) && typeof channel.team_id === 'string') {
+        return channel.team_id;
+    }
+
+    return searchTeam;
+}
 
 const SearchBox = forwardRef(
     (
@@ -167,6 +181,7 @@ const SearchBox = forwardRef(
 
         const updateSearchValue = useCallback(
             (value: string, matchedPretext: string) => {
+                const suggestedTeamId = getSuggestedTeamId(getItemForTerm(results, value), searchTeam);
                 const escapedMatchedPretext = RegExp.escape(matchedPretext);
                 const caretPosition = getCaretPosition();
                 const extraSpace = caretPosition === searchTerms.length ? ' ' : '';
@@ -178,6 +193,10 @@ const SearchBox = forwardRef(
                     val = value.slice(1);
                 }
 
+                if (suggestedTeamId !== searchTeam) {
+                    setSearchTeam(suggestedTeamId);
+                }
+
                 setSearchTerms(
                     searchTerms.slice(0, caretPosition).trimEnd().replace(new RegExp(escapedMatchedPretext + '$', 'i'), '').trimEnd() +
                     val +
@@ -186,7 +205,7 @@ const SearchBox = forwardRef(
                 );
                 focus((caretPosition + value.length + 1) - matchedPretext.length);
             },
-            [searchTerms, setSearchTerms, focus, getCaretPosition],
+            [results, searchTeam, searchTerms, setSearchTerms, focus, getCaretPosition],
         );
 
         const handleKeyDown = useCallback(

@@ -10,8 +10,14 @@ import {
     screen,
     userEvent,
 } from 'tests/react_testing_utils';
+import Constants from 'utils/constants';
 
 import SearchBox from './search_box';
+import * as SearchHooks from './hooks';
+
+const TestSuggestion = ({term}: {term: string}) => {
+    return <div>{term}</div>;
+};
 
 describe('components/new_search/SearchBox', () => {
     const baseProps = {
@@ -23,6 +29,11 @@ describe('components/new_search/SearchBox', () => {
         crossTeamSearchEnabled: true,
         myTeams: [{id: 'team1', name: 'team1', display_name: 'Team 1', description: ''}] as Team[],
     };
+
+    afterEach(() => {
+        jest.restoreAllMocks();
+        jest.clearAllMocks();
+    });
 
     test('should have the focus on the input field', () => {
         renderWithContext(<SearchBox {...baseProps}/>);
@@ -64,6 +75,58 @@ describe('components/new_search/SearchBox', () => {
         input.focus();
         await userEvent.keyboard('{Enter}');
         expect(baseProps.onSearch).toHaveBeenCalledTimes(1);
+    });
+
+    test('should switch to the suggested channel team when selecting a channel in all teams', async () => {
+        const clearSelection = jest.fn();
+        jest.spyOn(SearchHooks, 'useSearchSuggestions').mockReturnValue({
+            matchedPretext: 'tow',
+            terms: ['town-square'],
+            items: [{team_id: 'team2', type: Constants.OPEN_CHANNEL}],
+            components: [TestSuggestion],
+        });
+        jest.spyOn(SearchHooks, 'useSearchSuggestionSelection').mockReturnValue({
+            selectedTerm: 'town-square',
+            clearSelection,
+            setSelectedTerm: jest.fn(),
+            setSelectionByDelta: jest.fn(),
+        });
+
+        renderWithContext(
+            <SearchBox
+                {...baseProps}
+                initialSearchTerms={'in:tow'}
+                initialSearchTeam={''}
+                myTeams={[
+                    {id: 'team1', name: 'team1', display_name: 'Team 1', description: '', delete_at: 0} as Team,
+                    {id: 'team2', name: 'team2', display_name: 'Team 2', description: '', delete_at: 0} as Team,
+                ]}
+            />,
+            {
+                entities: {
+                    teams: {
+                        currentTeamId: 'team1',
+                        teams: {
+                            team1: {id: 'team1', name: 'team1', display_name: 'Team 1', description: '', delete_at: 0},
+                            team2: {id: 'team2', name: 'team2', display_name: 'Team 2', description: '', delete_at: 0},
+                        },
+                        myMembers: {
+                            team1: {team_id: 'team1'},
+                            team2: {team_id: 'team2'},
+                        },
+                    },
+                },
+            },
+        );
+
+        const input = screen.getByPlaceholderText('Search messages');
+        input.focus();
+        await userEvent.keyboard('{Enter}');
+
+        expect(input).toHaveValue('in:town-square ');
+        expect(screen.getByText('Team 2')).toBeInTheDocument();
+        expect(clearSelection).toHaveBeenCalledTimes(1);
+        expect(baseProps.onSearch).not.toHaveBeenCalled();
     });
 
     test('should be able to select with the up and down arrows', async () => {

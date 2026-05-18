@@ -111,6 +111,21 @@ const SearchBoxContainer = styled.div`
     z-index: 1050;
 `;
 
+const SEARCH_TEAM_FILTER_REGEX = /\b(?:in|channel):\s*(\S+)/i;
+
+function getEffectiveSearchTeam(searchType: string, searchTeam: string, searchTerms: string, currentTeamId: string) {
+    if ((searchType !== '' && searchType !== 'messages' && searchType !== 'files') || searchTeam || !currentTeamId) {
+        return searchTeam;
+    }
+
+    const match = SEARCH_TEAM_FILTER_REGEX.exec(searchTerms);
+    if (!match || match[1].startsWith('@')) {
+        return searchTeam;
+    }
+
+    return currentTeamId;
+}
+
 const NewSearch = (): JSX.Element => {
     const intl = useIntl();
     const currentChannelName = useSelector(getCurrentChannelNameForSearchShortcut);
@@ -239,9 +254,11 @@ const NewSearch = (): JSX.Element => {
 
     const runSearch = useCallback(
         (searchType: string, searchTeam: string, searchTerms: string) => {
+            const effectiveSearchTeam = getEffectiveSearchTeam(searchType, searchTeam, searchTerms, currentTeamId);
+
             dispatch(updateSearchType(searchType));
             dispatch(updateSearchTerms(searchTerms));
-            dispatch(updateSearchTeam(searchTeam));
+            dispatch(updateSearchTeam(effectiveSearchTeam));
 
             if (searchType === '' || searchType === 'messages' || searchType === 'files') {
                 dispatch(showSearchResults(false));
