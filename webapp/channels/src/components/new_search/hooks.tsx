@@ -2,10 +2,12 @@
 // See LICENSE.txt for license information.
 
 import {useState, useRef, useEffect, useMemo, useCallback} from 'react';
-import {useDispatch} from 'react-redux';
+import {useDispatch, useSelector} from 'react-redux';
 
 import type {Channel} from '@mattermost/types/channels';
 import type {ServerError} from '@mattermost/types/errors';
+
+import {getCurrentTeamId} from 'mattermost-redux/selectors/entities/teams';
 
 import {autocompleteChannelsForSearchInTeam} from 'actions/channel_actions';
 import {autocompleteUsersInTeam} from 'actions/user_actions';
@@ -21,8 +23,10 @@ import {SearchFileExtensionProvider} from './extension_suggestions_provider';
 
 export const useSearchSuggestions = (searchType: string, searchTerms: string, searchTeam: string, caretPosition: number, getCaretPosition: () => number): SuggestionResults => {
     const dispatch = useDispatch();
+    const currentTeamId = useSelector(getCurrentTeamId);
 
     const [results, setResults] = useState<SuggestionResults>(emptyResults());
+    const autocompleteTeamId = searchTeam || currentTeamId || '';
 
     const suggestionProviders = useRef<Provider[]>([
         new SearchDateProvider(),
@@ -59,9 +63,9 @@ export const useSearchSuggestions = (searchType: string, searchTerms: string, se
                 trimmedResults = trimResults(trimmedResults, 10);
 
                 setResults(trimmedResults);
-            }, searchTeam);
+            }, autocompleteTeamId);
         });
-    }, [searchTerms, searchTeam, searchType, caretPosition]);
+    }, [searchTerms, autocompleteTeamId, searchType, caretPosition]);
 
     return results;
 };
