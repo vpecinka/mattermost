@@ -99,10 +99,6 @@ func (a *App) buildEmailNotification(
 		messageHTML = a.GetMessageForNotification(post, team.Name, a.GetSiteURL(), translateFunc)
 		messageText = post.Message
 
-		// Ensure attachments are shown even if message is empty
-		if messageHTML == "" && len(post.Attachments()) > 0 {
-			messageHTML = "<p>&nbsp;</p>" // minimal valid HTML to trigger attachment processing
-		}
 	}
 
 	landingURL := a.GetSiteURL() + "/landing#/_redirect"
@@ -365,7 +361,13 @@ func (a *App) getNotificationEmailBodyFromEmailNotification(rctx request.CTX, re
 
 	if emailNotification.MessageHTML != "" {
 		pData.Message = template.HTML(emailNotification.MessageHTML)
+	}
 
+	// Show time and attachments whenever there is a message or post attachments.
+	// Decoupled from MessageHTML so that attachment-only posts (empty message)
+	// do not require a dummy HTML placeholder that would cause docconv to fail.
+	hasContent := emailNotification.MessageHTML != "" || len(post.Attachments()) > 0
+	if hasContent {
 		// Get formatted time for message using the UseMilitaryTime field
 		t := utils.GetFormattedPostTime(recipient, post, emailNotification.UseMilitaryTime, translateFunc)
 		messageTime := map[string]any{
@@ -374,8 +376,6 @@ func (a *App) getNotificationEmailBodyFromEmailNotification(rctx request.CTX, re
 			"TimeZone": t.TimeZone,
 		}
 		pData.Time = translateFunc("app.notification.body.dm.time", messageTime)
-
-		// Process message attachments
 		pData.MessageAttachments = email.ProcessMessageAttachments(post, a.GetSiteURL())
 	}
 
@@ -396,8 +396,8 @@ func (a *App) getNotificationEmailBodyFromEmailNotification(rctx request.CTX, re
 		pData.ChannelName = emailNotification.ChannelName
 	}
 
-	// Only include posts in notification email if message content is available
-	if emailNotification.MessageHTML != "" {
+	// Include post in notification email if there is a message or attachments
+	if hasContent {
 		data.Props["Posts"] = []postData{pData}
 	} else {
 		data.Props["Posts"] = []postData{}
