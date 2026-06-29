@@ -1,4 +1,5 @@
-#!/bin/zsh
+#!/usr/bin/env bash
+set -e
 
 # Colors for output
 RED='\033[0;31m'
@@ -22,19 +23,20 @@ echo -e "${BLUE}Plugins: ${PLUGIN_PACKAGES}${NC}"
 echo -e "\n${YELLOW}===== BUILDING WEBAPP ================${NC}\n"
 cd webapp
 . ~/.nvm/nvm.sh
-nvm use v24
+nvm use v24 || exit 1
 make dist
 
 echo -e "\n${YELLOW}===== BUILDING SERVER ================${NC}\n"
 cd ../server
-make build-linux-amd64 
+make build-linux-amd64 || exit 1
 
 
 echo -e "\n${YELLOW}===== MAKING APP PACKAGE =============${NC}\n"
-make package-linux-amd64
+make package-linux-amd64 || exit 1
 
 cd ..
 
 echo -e "\n${YELLOW}===== TESTING APP PACKAGE ============${NC}\n"
 echo -e "Testing package ${BLUE}server/dist/mattermost-team-linux-amd64.tar.gz${NC}"
-tar tzf server/dist/mattermost-team-linux-amd64.tar.gz >/dev/null && echo -e "${GREEN}✓ Package build successfully${NC}"
+tar tzf server/dist/mattermost-team-linux-amd64.tar.gz >/dev/null || exit 1
+echo -e "${GREEN}✓ Package build successfully${NC}"
