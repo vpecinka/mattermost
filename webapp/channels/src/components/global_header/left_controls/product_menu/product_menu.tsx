@@ -79,7 +79,7 @@ const ProductMenu = (): JSX.Element => {
     const menuRef = useRef<HTMLDivElement>(null);
     const currentProductID = useCurrentProductId();
     const currentTeam = useSelector(getCurrentTeam);
-    const isFreeEdition = useSelector(isFreeEditionSelector);
+    let isFreeEdition = useSelector(isFreeEditionSelector);
     const visibleSwitcherItems = useSelector(
         (state: GlobalState) => {
             if (!isSwitcherOpen(state)) {
@@ -145,7 +145,7 @@ const ProductMenu = (): JSX.Element => {
     });
 
     // SZN: Always show free edition branding (with logo and badge) even when using custom license
-    const isFreeEdition = true;
+    isFreeEdition = true;
 
     return (
         <div ref={menuRef}>
