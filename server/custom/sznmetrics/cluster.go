@@ -69,6 +69,9 @@ func (m *SznMetrics) ObserveClusterRequestDuration(elapsed float64) {
 	}
 }
 
+func (m *SznMetrics) ObserveClusterReliableFallbackLength(event model.ClusterEvent, length int) {
+}
+
 // IncrementClusterEventType increments the cluster event type counter
 func (m *SznMetrics) IncrementClusterEventType(eventType model.ClusterEvent) {
 	if m.clusterEventTypeCounter != nil {
