@@ -43,9 +43,9 @@ func (seb *Broker) GetActiveEngines() []SearchEngineInterface {
 	engines := []SearchEngineInterface{}
 
 	// Prioritize SznSearchEngine over ElasticsearchEngine
-	if seb.SznSearchEngine != nil && seb.SznSearchEngine.IsActive() {
+	if seb.SznSearchEngine != nil && seb.SznSearchEngine.IsActive() && seb.SznSearchEngine.IsHealthy() {
 		engines = append(engines, seb.SznSearchEngine)
-	} else if seb.ElasticsearchEngine != nil && seb.ElasticsearchEngine.IsActive() {
+	} else if seb.ElasticsearchEngine != nil && seb.ElasticsearchEngine.IsActive() && seb.ElasticsearchEngine.IsHealthy() {
 		engines = append(engines, seb.ElasticsearchEngine)
 	}
 

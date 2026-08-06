@@ -369,6 +369,11 @@ func (c *SznCluster) StopInterNodeCommunication() {
 	mlog.Info("SznCluster: Inter-node communication stopped")
 }
 
+// Shutdown stops cluster communication during platform shutdown.
+func (c *SznCluster) Shutdown() {
+	c.StopInterNodeCommunication()
+}
+
 // RegisterClusterMessageHandler registers a handler for cluster events
 func (c *SznCluster) RegisterClusterMessageHandler(event model.ClusterEvent, handler einterfaces.ClusterMessageHandler) {
 	c.handlersMu.Lock()
